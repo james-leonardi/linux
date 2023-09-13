@@ -6,23 +6,33 @@
 
 SYSCALL_DEFINE2(s2_encrypt, char __user *, str, int, key)
 {
+	unsigned long strlen;
+	char *kstr;
+	char *i;
+
 	/* Check if key is within valid 1-5 range */
-	if (unlikely(key < 1 || key > 5))
+	if (unlikely(key < 1 || key > 5)) {
+		printk(KERN_ERR "[s2_encrypt] Received out-of-bounds key");
 		return EINVAL;
+	}
 
 	/* Get string length */
-	unsigned long strlen = strnlen_user(str, PAGE_SIZE);
-	if (unlikely(strlen == 0 || strlen > PAGE_SIZE))
+	strlen = strnlen_user(str, PAGE_SIZE);
+	if (unlikely(strlen == 0 || strlen > PAGE_SIZE)) {
+		printk(KERN_ERR "[s2_encrypt] Unable to fetch length of given string");
 		return EINVAL;
+	}
 
 	/* Verify user pointer */
-	if (!access_ok(VERIFY_WRITE, str, strlen))
+	if (!access_ok(str, strlen)) {
+		printk(KERN_ERR "[s2_encrypt] Memory access error");
 		return EINVAL;
+	}
 
 	/* Basic verification succeeded - perform operation */
 
 	/* Copy string to kernel space */
-	char *kstr = kmalloc(strlen, GFP_KERNEL);
+	kstr = kmalloc(strlen, GFP_KERNEL);
 	if (unlikely(copy_from_user(kstr, str, strlen))) {
 		printk(KERN_ERR "[s2_encrypt] Failed to copy string from userspace");
 		kfree(kstr);
@@ -30,9 +40,8 @@ SYSCALL_DEFINE2(s2_encrypt, char __user *, str, int, key)
 	}
 
 	/* Add 'key' to each char in string */
-	for (char *i = kstr; kstr; kstr++) {
+	for (i = kstr; *i; i++)
 		*i += key;
-	}
 
 	/* Copy string back to user space */
 	if (unlikely(copy_to_user(str, kstr, strlen))) {
@@ -42,7 +51,7 @@ SYSCALL_DEFINE2(s2_encrypt, char __user *, str, int, key)
 	}
 
 	/* Print out encrypted string to kernel log */
-	printk(KERN_INFO kstr);
+	printk(KERN_INFO "%s", kstr);
 	kfree(kstr);
 	return 0;
 }
