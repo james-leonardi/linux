@@ -3,9 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define USAGE_INFO "Usage: %s -s string -k key\n", *argv
 #define SYS_s2_encrypt 335
-
 int main(int argc, char **argv) {
 	int opt;
 	char *str = NULL;
@@ -25,13 +23,14 @@ int main(int argc, char **argv) {
 			key = atoi(optarg);
 			break;
 		default:
-			fprintf(stderr, USAGE_INFO);
+			fprintf(stderr, "Usage: %s -s string -k key\n", *argv);
 			return(EXIT_FAILURE);
 		}
 	}
 
 	if (!s || !k) {
-		fprintf(stderr, USAGE_INFO);
+		fprintf(stderr, "Usage: %s -s string -k key\n", *argv);
+		if (s) free(str);
 		return EXIT_FAILURE;
 	}
 
@@ -40,7 +39,8 @@ int main(int argc, char **argv) {
 	if (ret) 	fprintf(stderr, "[s2_encrypt_test] Received the following error code from s2_encrypt():\n");
 	else		fprintf(stderr, "[s2_encrypt_test] Received string '%s' from s2_encrypt()\n", str);
 	printf("%li\n", ret);
+	free(str);
+	return EXIT_SUCCESS;
 }
 
 #undef SYS_s2_encrypt
-#undef USAGE_INFO
