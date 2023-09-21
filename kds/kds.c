@@ -5,6 +5,7 @@
 #include <linux/stat.h>
 #include <linux/string.h>
 #include <linux/slab.h>
+#include <linux/list.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("James Leonardi <james.leonardi@stonybrook.edu>");
@@ -17,6 +18,42 @@ static unsigned int ints_capacity = 0;
 
 module_param(int_str, charp, 0);
 MODULE_PARM_DESC(int_str, "List of space-separated integers to be parsed by the module");
+
+/* ===== LINKED LIST ===== */
+
+struct ll_node {
+	struct list_head links;
+	int value;
+};
+
+static struct list_head *ll_create(int *list, int list_size) {
+	int count = 0;
+
+	struct list_head *kds_ll = kmalloc(sizeof(struct list_head), GFP_KERNEL);
+	INIT_LIST_HEAD(kds_ll);
+
+	while (count < list_size) {
+		struct ll_node *new = kmalloc(sizeof(struct ll_node), GFP_KERNEL);
+		INIT_LIST_HEAD(&new->links);
+		new->value = *(list + count);
+		list_add_tail(&new->links, kds_ll);
+		++count;
+	}
+
+	return kds_ll;
+}
+
+static void ll_print(struct list_head *ll) {
+	struct ll_node *iterator;
+	printk(KERN_INFO "[KDS] LinkedList:");
+	list_for_each_entry(iterator, ll, links) {
+		printk(KERN_CONT " %d", iterator->value);
+	}
+	printk(KERN_CONT "\n");
+}
+
+/* ======================= */
+
 
 /* Prints the memory allocated by 'ints', marking memory
  * not considered part of the array as [UNUSED] */
@@ -53,6 +90,7 @@ static int __init kds_init(void)
 {
 	char *token;
 	long num;
+	struct list_head *ll;
 	printk(KERN_DEBUG "[KDS] Init\n");
 	printk(KERN_DEBUG "[KDS] Received parameter: %s\n", int_str);
 
@@ -80,6 +118,10 @@ static int __init kds_init(void)
 	printk(KERN_DEBUG "[KDS] Reached end of int_str\n");
 	printarr();
 	printints();
+
+	ll = ll_create(ints, ints_count);
+	ll_print(ll);
+
 	return 0;
 }
 #undef INTS_PG_SZ
