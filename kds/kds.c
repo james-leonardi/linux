@@ -11,26 +11,48 @@ MODULE_AUTHOR("James Leonardi <james.leonardi@stonybrook.edu>");
 MODULE_DESCRIPTION("Kernel Data Structures");
 
 static char *int_str = "";
-static unsigned int count = 0;
 static int *ints = NULL;
-static int capacity = 0;
+static unsigned int ints_count = 0;
+static unsigned int ints_capacity = 0;
 
 module_param(int_str, charp, 0);
 MODULE_PARM_DESC(int_str, "List of space-separated integers to be parsed by the module");
 
+/* Prints the memory allocated by 'ints', marking memory
+ * not considered part of the array as [UNUSED] */
 static inline void printarr(void) {
 	int c = 0;
-	while (c < capacity) {
-		printk(KERN_DEBUG "  [%i/%i] %i (%c)", c + 1, capacity, *(ints + c), *(ints + c));
-		c++;
+	if (ints == NULL) {
+		printk(KERN_DEBUG "[KDS] No elements in 'ints' list\n");
+		return;
+	}
+	printk(KERN_DEBUG "[KDS] ints_count = %i\n", ints_count);
+	while (c < ints_capacity) {
+		printk(KERN_DEBUG "  [%i/%i] %i (%c) %s\n",
+				c + 1,
+				ints_capacity,
+				*(ints + c),
+				(char) *(ints + c),
+				c < ints_count ? "" : "[UNUSED]");
+		++c;
 	}
 }
 
-#define INTS_PG_SZ 4
+static inline void printints(void) {
+	int count = 0;
+	printk(KERN_INFO "[KDS] Integer list:");
+	while (count < ints_count) {
+		printk(KERN_CONT " %d", *(ints + count));
+		++count;
+	}
+	printk(KERN_CONT "\n");
+}
+
+#define INTS_PG_SZ 32
 static int __init kds_init(void)
 {
 	char *token;
-	long conv;
+	long num;
 	printk(KERN_DEBUG "[KDS] Init\n");
 	printk(KERN_DEBUG "[KDS] Received parameter: %s\n", int_str);
 
@@ -38,31 +60,33 @@ static int __init kds_init(void)
 	while ((token = strsep(&int_str, " ")) != NULL) {
 		printk(KERN_DEBUG "[KDS] Next token: %s\n", token);
 		
-		/* Verify we have enough storage to store number + null term */
-		if (count + 1 >= capacity) {
-			/* We've run out of space in the int array.
-			 * Allocate more storage */
-			ints = krealloc(ints, (capacity + INTS_PG_SZ) * sizeof(int), GFP_KERNEL);
-			memset(ints + capacity, 0, INTS_PG_SZ * sizeof(int));
-			capacity += INTS_PG_SZ;
-		}
-
 		/* Verify legitimate number encountered */
-		if (kstrtol(token, 10, &conv)) {
-			printk(KERN_DEBUG "[KDS] Invalid token encountered, skipping");
+		if (kstrtol(token, 10, &num)) {
+			printk(KERN_DEBUG "  This token is invalid, skipping\n");
 			continue;
 		}
-		*(ints + count) = (int)conv;
-		++count;
+
+		/* Verify we have enough storage to store new number */
+		if (ints_count == ints_capacity) {
+			/* We've run out of space in the int array. Allocate more storage. */
+			ints_capacity += INTS_PG_SZ;
+			ints = krealloc(ints, ints_capacity * sizeof(int), GFP_KERNEL);
+		}
+
+		/* Store new integer and increase the count */
+		*(ints + ints_count) = (int)num;
+		++ints_count;
 	}
 	printk(KERN_DEBUG "[KDS] Reached end of int_str\n");
 	printarr();
+	printints();
 	return 0;
 }
 #undef INTS_PG_SZ
 
 static void __exit kds_exit(void)
 {
+	if (ints) kfree(ints);
 	printk(KERN_DEBUG "[KDS] Exit\n");
 }
 
