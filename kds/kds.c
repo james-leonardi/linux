@@ -8,6 +8,7 @@
 
 #include <linux/list.h>
 #include <linux/rbtree.h>
+#include <linux/hashtable.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("James Leonardi <james.leonardi@stonybrook.edu>");
@@ -122,7 +123,7 @@ static void rb_free(struct rb_root *root) {
 	struct rb_entry *entry;
 	while ((cursor = rb_first(root))) {
 		entry = rb_entry(cursor, struct rb_entry, node);
-		rb_erase(&(cursor->node), root);
+		rb_erase(&(entry->node), root);
 		kfree(entry);
 	}
 	kfree(root);
@@ -133,7 +134,60 @@ static void rb_free(struct rb_root *root) {
 
 /* ========== HASHTABLE ========== */
 
+struct ht_entry {
+	struct hlist_node list;
+	int value;
+};
 
+DEFINE_HASHTABLE(ht, 10);
+static void ht_create(int *list, size_t list_size) {
+	size_t count = 0;
+
+	while (count < list_size) {
+		struct ht_entry *new = kmalloc(sizeof(struct ht_entry), GFP_KERNEL);
+		new->value = *(list + count);
+		hash_add(ht, &(new->list), new->value);
+		++count;
+	}
+}
+
+static void ht_print(void) {
+	int bkt;
+	struct ht_entry *cursor;
+	
+	printk(KERN_INFO "[KDS] Hash Table:");
+	hash_for_each(ht, bkt, cursor, list) {
+		printk(KERN_CONT " %d", cursor->value);
+	}
+	printk(KERN_CONT "\n");
+}
+
+static void ht_print_possible(void) {
+	int current_key;
+	struct ht_entry *cursor;
+
+	printk(KERN_INFO "[KDS] Hash Table (by key): {");
+	/* Loop over every possible key */
+	for (current_key = 0; current_key < 1024; current_key++) {
+		printk(KERN_CONT " ");
+		hash_for_each_possible(ht, cursor, list, current_key) {
+			printk(KERN_CONT "%d ", cursor->value);
+		}
+		printk(KERN_CONT "|");
+	}
+	printk(KERN_CONT "}\n");
+}
+
+
+static void ht_free(void) {
+	struct ht_entry *cursor;
+	struct hlist_node *temp;
+	int bkt;
+	hash_for_each_safe(ht, bkt, temp, cursor, list) {
+		hash_del(&(cursor->list));
+		kfree(cursor);
+	}
+}
 
 /* =============================== */
 
@@ -148,7 +202,7 @@ static inline void printarr(void) {
 	}
 	printk(KERN_DEBUG "[KDS] ints_count = %lu\n", ints_count);
 	while (c < ints_capacity) {
-		printk(KERN_DEBUG "  [%lu/%lu] %i (%c) %s\n",
+		printk(KERN_DEBUG "  [%lu/%lu] %d (%c) %s\n",
 				c + 1,
 				ints_capacity,
 				*(ints + c),
@@ -210,6 +264,11 @@ static int __init kds_init(void)
 	rb = rb_create(ints, ints_count);
 	rb_print(rb);
 	rb_free(rb);
+
+	ht_create(ints, ints_count);
+	ht_print();
+	ht_print_possible();
+	ht_free();
 
 	return 0;
 }
