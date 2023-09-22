@@ -117,6 +117,17 @@ static void rb_print(struct rb_root *root) {
 	printk(KERN_CONT "\n");
 }
 
+static void rb_free(struct rb_root *root) {
+	struct rb_node *cursor;
+	struct rb_entry *entry;
+	while ((cursor = rb_first(root))) {
+		entry = rb_entry(cursor, struct rb_entry, node);
+		rb_erase(&(cursor->node), root);
+		kfree(entry);
+	}
+	kfree(root);
+}
+
 /* ==================================== */
 
 
@@ -198,6 +209,7 @@ static int __init kds_init(void)
 
 	rb = rb_create(ints, ints_count);
 	rb_print(rb);
+	rb_free(rb);
 
 	return 0;
 }
