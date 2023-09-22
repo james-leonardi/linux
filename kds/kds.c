@@ -192,6 +192,12 @@ static void ht_free(void) {
 /* =============================== */
 
 
+/* ========== RADIX TREE ========== */
+
+
+
+/* ================================ */
+
 /* Prints the memory allocated by 'ints', marking memory
  * not considered part of the array as [UNUSED] */
 static inline void printarr(void) {
