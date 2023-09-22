@@ -10,6 +10,7 @@
 #include <linux/rbtree.h>
 #include <linux/hashtable.h>
 #include <linux/radix-tree.h>
+#include <linux/xarray.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("James Leonardi <james.leonardi@stonybrook.edu>");
@@ -211,7 +212,7 @@ static struct radix_tree_root *rt_create(int *list, size_t list_size) {
 		++count;
 	}
 
-	return root;
+	 return root;
 }
 
 static void rt_print(struct radix_tree_root *root) {
@@ -266,12 +267,14 @@ static void rt_print_odd(struct radix_tree_root *root) {
 #undef RT_MAX_RESULTS
 
 static void rt_free(struct radix_tree_root *root) {
-	void **slot;
+	void **slot, *entry;
 	struct radix_tree_iter iter;
 
 	radix_tree_for_each_slot(slot, root, &iter, 0) {
 		/* printk(KERN_INFO "%d\n", **(int**)slot); */
-		radix_tree_delete(root, iter.index);
+		entry = radix_tree_delete(root, iter.index);
+		if (entry)
+			kfree(entry);
 	}
 
 	kfree(root);
@@ -280,6 +283,23 @@ static void rt_free(struct radix_tree_root *root) {
 #undef RT_IS_ODD
 
 /* ================================ */
+
+
+/* ========== XARRAY ========== */
+/*
+static struct xarray *xa_create(int *list, size_t list_size) {
+	size_t count = 0;
+
+	struct xarray *array = kmalloc(sizeof(xarray), GFP_KERNEL);
+	xa_init(array);
+
+	while (count < list_size) {
+		
+		++count;
+	}
+}
+*/
+/* ============================ */
 
 /* Prints the memory allocated by 'ints', marking memory
  * not considered part of the array as [UNUSED] */
