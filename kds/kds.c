@@ -9,6 +9,7 @@
 #include <linux/list.h>
 #include <linux/rbtree.h>
 #include <linux/hashtable.h>
+#include <linux/radix-tree.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("James Leonardi <james.leonardi@stonybrook.edu>");
@@ -194,7 +195,89 @@ static void ht_free(void) {
 
 /* ========== RADIX TREE ========== */
 
+#define RT_IS_ODD 0
 
+static struct radix_tree_root *rt_create(int *list, size_t list_size) {
+	size_t count = 0;
+	int *num;
+
+	struct radix_tree_root *root = kmalloc(sizeof(struct radix_tree_root), GFP_KERNEL);
+	INIT_RADIX_TREE(root, GFP_KERNEL);
+
+	while (count < list_size) {
+		num = kmalloc(sizeof(int), GFP_KERNEL);
+		*num = *(list + count);
+		radix_tree_insert(root, *num, num);
+		++count;
+	}
+
+	return root;
+}
+
+static void rt_print(struct radix_tree_root *root) {
+	void **slot;
+	struct radix_tree_iter iter;
+	int *element;
+
+	printk(KERN_INFO "[KDS] Radix-Tree: [");
+	radix_tree_for_each_slot(slot, root, &iter, 0) {
+		element = (int *)*slot;
+		if (!element) {
+			printk(KERN_CONT "{%lu:%s}", iter.index, "ERR");
+			continue;
+		}
+		printk(KERN_CONT " {%lu:%d}", iter.index, *element);
+	}
+	printk(KERN_CONT " ]\n");
+}
+
+static size_t rt_tag_odd(struct radix_tree_root *root) {
+	size_t tagged;
+	void **slot;
+	struct radix_tree_iter iter;
+	int *element;
+
+	radix_tree_for_each_slot(slot, root, &iter, 0) {
+		element = (int *)*slot;
+		if (!element || (*element % 2 == 0))
+			continue;
+		radix_tree_tag_set(root, iter.index, RT_IS_ODD);
+		++tagged;
+	}
+
+	return tagged;
+}
+
+#define RT_MAX_RESULTS 1000
+static void rt_print_odd(struct radix_tree_root *root) {
+	void **results;
+	unsigned int results_count, count = 0;
+
+	results = kmalloc(sizeof(int) * RT_MAX_RESULTS, GFP_KERNEL);
+	results_count = radix_tree_gang_lookup_tag(root, results, 0, RT_MAX_RESULTS, RT_IS_ODD);
+
+	printk(KERN_INFO "[KDS] Radix-Tree (odd elements):");
+	while (count < results_count) {
+		printk(KERN_CONT " %d", *(*((int**)(results) + count)));
+		++count;
+	}
+	printk(KERN_CONT "\n");
+}
+#undef RT_MAX_RESULTS
+
+static void rt_free(struct radix_tree_root *root) {
+	void **slot;
+	struct radix_tree_iter iter;
+
+	radix_tree_for_each_slot(slot, root, &iter, 0) {
+		/* printk(KERN_INFO "%d\n", **(int**)slot); */
+		radix_tree_delete(root, iter.index);
+	}
+
+	kfree(root);
+}
+
+#undef RT_IS_ODD
 
 /* ================================ */
 
@@ -235,6 +318,8 @@ static int __init kds_init(void)
 	long num;
 	struct list_head *ll;
 	struct rb_root *rb;
+	struct radix_tree_root *rt;
+
 	printk(KERN_DEBUG "[KDS] Init\n");
 	printk(KERN_DEBUG "[KDS] Received parameter: %s\n", int_str);
 
@@ -275,6 +360,12 @@ static int __init kds_init(void)
 	ht_print();
 	ht_print_possible();
 	ht_free();
+
+	rt = rt_create(ints, ints_count);
+	rt_print(rt);
+	rt_tag_odd(rt);
+	rt_print_odd(rt);
+	rt_free(rt);
 
 	return 0;
 }
