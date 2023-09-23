@@ -11,6 +11,7 @@
 #include <linux/hashtable.h>
 #include <linux/radix-tree.h>
 #include <linux/xarray.h>
+#include <linux/bitmap.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("James Leonardi <james.leonardi@stonybrook.edu>");
@@ -141,7 +142,7 @@ struct ht_entry {
 	int value;
 };
 
-DEFINE_HASHTABLE(ht, 10);
+static DEFINE_HASHTABLE(ht, 10);
 static void ht_create(int *list, size_t list_size) {
 	size_t count = 0;
 
@@ -360,6 +361,45 @@ static void xa_free(struct xarray *array) {
 
 /* ============================ */
 
+
+/* ========== BITMAP ========== */
+
+#define BM_BITS 1000
+
+/* static DECLARE_BITMAP(bm, BM_BITS); */
+static unsigned long *bm_create(int *list, size_t list_size) {
+	size_t count = 0;
+	unsigned long *bm = bitmap_alloc(BM_BITS, GFP_KERNEL);
+	bitmap_zero(bm, BM_BITS);
+	/* memset(bm, 0, (BM_BITS + sizeof(char) - 1) / sizeof(char)); */
+
+	while (count < list_size) {
+		set_bit(*(list + count), bm);
+		++count;
+	}
+
+	return bm;
+}
+
+static void bm_print(unsigned long *bm) {
+	unsigned long bit;
+
+	printk(KERN_INFO "[KDS] Bitmap:");
+	for_each_set_bit(bit, bm, BM_BITS) {
+		printk(KERN_CONT " %lu", bit);
+	}
+	printk(KERN_CONT "\n");
+}
+
+static void bm_free(unsigned long *bm) {
+	bitmap_zero(bm, BM_BITS);
+	bitmap_free(bm);
+}
+
+#undef BM_BITS
+
+/* ============================ */
+
 /* Prints the memory allocated by 'ints', marking memory
  * not considered part of the array as [UNUSED] */
 static inline void printarr(void) {
@@ -399,6 +439,7 @@ static int __init kds_init(void)
 	struct rb_root *rb;
 	struct radix_tree_root *rt;
 	struct xarray *xa;
+	unsigned long *bm;
 
 	printk(KERN_DEBUG "[KDS] Init\n");
 	printk(KERN_DEBUG "[KDS] Received parameter: %s\n", int_str);
@@ -452,6 +493,10 @@ static int __init kds_init(void)
 	xa_tag_odd(xa);
 	xa_print_odd(xa);
 	xa_free(xa);
+
+	bm = bm_create(ints, ints_count);
+	bm_print(bm);
+	bm_free(bm);
 
 	return 0;
 }
