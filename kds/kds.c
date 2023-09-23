@@ -369,13 +369,15 @@ static void xa_free(struct xarray *array) {
 /* static DECLARE_BITMAP(bm, BM_BITS); */
 static unsigned long *bm_create(int *list, size_t list_size) {
 	size_t count = 0;
+	int new;
 	unsigned long *bm = bitmap_alloc(BM_BITS, GFP_KERNEL);
 	bitmap_zero(bm, BM_BITS);
 	/* memset(bm, 0, (BM_BITS + sizeof(char) - 1) / sizeof(char)); */
 
 	while (count < list_size) {
-		if (*(list + count) < BM_BITS)
-			set_bit(*(list + count), bm);
+		new = *(list + count);
+		if (new >= 0 && new < BM_BITS)
+			set_bit(new, bm);
 		++count;
 	}
 
