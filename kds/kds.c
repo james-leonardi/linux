@@ -208,7 +208,7 @@ static struct radix_tree_root *rt_create(int *list, size_t list_size) {
 	while (count < list_size) {
 		num = kmalloc(sizeof(int), GFP_KERNEL);
 		*num = *(list + count);
-		radix_tree_insert(root, *num, num);
+		radix_tree_insert(root, count, num);
 		++count;
 	}
 
@@ -220,7 +220,7 @@ static void rt_print(struct radix_tree_root *root) {
 	struct radix_tree_iter iter;
 	int *element;
 
-	printk(KERN_INFO "[KDS] Radix-Tree: [");
+	printk(KERN_INFO "[KDS] Radix-Tree:");
 	radix_tree_for_each_slot(slot, root, &iter, 0) {
 		element = (int *)*slot;
 		if (!element) {
@@ -229,11 +229,11 @@ static void rt_print(struct radix_tree_root *root) {
 		}
 		printk(KERN_CONT " {%lu:%d}", iter.index, *element);
 	}
-	printk(KERN_CONT " ]\n");
+	printk(KERN_CONT "\n");
 }
 
-static size_t rt_tag_odd(struct radix_tree_root *root) {
-	size_t tagged;
+static unsigned int rt_tag_odd(struct radix_tree_root *root) {
+	unsigned int tagged;
 	void **slot;
 	struct radix_tree_iter iter;
 	int *element;
@@ -286,19 +286,78 @@ static void rt_free(struct radix_tree_root *root) {
 
 
 /* ========== XARRAY ========== */
-/*
+
+#define XA_IS_ODD XA_MARK_0
+
 static struct xarray *xa_create(int *list, size_t list_size) {
 	size_t count = 0;
+	int *num;
 
-	struct xarray *array = kmalloc(sizeof(xarray), GFP_KERNEL);
+	struct xarray *array = kmalloc(sizeof(struct xarray), GFP_KERNEL);
 	xa_init(array);
 
 	while (count < list_size) {
-		
+		num = kmalloc(sizeof(int), GFP_KERNEL);
+		*num = *(list + count);
+		xa_store(array, count, num, GFP_KERNEL);
 		++count;
 	}
+
+	return array;
 }
-*/
+
+static void xa_print(struct xarray *array) {
+	unsigned long index;
+	int *entry;
+
+	printk(KERN_INFO "[KDS] XArray:");
+	xa_for_each(array, index, entry) {
+		printk(KERN_CONT " {%lu:%d}", index, *entry);
+	}
+	printk(KERN_CONT "\n");
+}
+
+static unsigned int xa_tag_odd(struct xarray *array) {
+	unsigned int tagged;
+	unsigned long index;
+	int *entry;
+	
+	xa_for_each(array, index, entry) {
+		if (!entry || (*entry % 2 == 0))
+			continue;
+		xa_set_mark(array, index, XA_IS_ODD);
+		++tagged;
+	}
+
+	return tagged;
+}
+
+static void xa_print_odd(struct xarray *array) {
+	unsigned long index;
+	int *entry;
+
+	printk(KERN_INFO "[KDS] XArray (odd elements):");
+	xa_for_each_marked(array, index, entry, XA_IS_ODD) {
+		printk(KERN_CONT " %d", *entry);
+	}
+	printk(KERN_CONT "\n");
+}
+
+static void xa_free(struct xarray *array) {
+	unsigned long index;
+	int *entry;
+
+	xa_for_each(array, index, entry) {
+		/* printk(KERN_INFO "%d\n", *entry); */
+		xa_erase(array, index);
+		kfree(entry);
+	}
+
+	xa_destroy(array);
+}
+
+#undef XA_IS_ODD
+
 /* ============================ */
 
 /* Prints the memory allocated by 'ints', marking memory
@@ -339,6 +398,7 @@ static int __init kds_init(void)
 	struct list_head *ll;
 	struct rb_root *rb;
 	struct radix_tree_root *rt;
+	struct xarray *xa;
 
 	printk(KERN_DEBUG "[KDS] Init\n");
 	printk(KERN_DEBUG "[KDS] Received parameter: %s\n", int_str);
@@ -386,6 +446,12 @@ static int __init kds_init(void)
 	rt_tag_odd(rt);
 	rt_print_odd(rt);
 	rt_free(rt);
+
+	xa = xa_create(ints, ints_count);
+	xa_print(xa);
+	xa_tag_odd(xa);
+	xa_print_odd(xa);
+	xa_free(xa);
 
 	return 0;
 }
