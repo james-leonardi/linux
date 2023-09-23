@@ -364,7 +364,7 @@ static void xa_free(struct xarray *array) {
 
 /* ========== BITMAP ========== */
 
-#define BM_BITS 1000
+#define BM_BITS 1001
 
 /* static DECLARE_BITMAP(bm, BM_BITS); */
 static unsigned long *bm_create(int *list, size_t list_size) {
@@ -374,7 +374,8 @@ static unsigned long *bm_create(int *list, size_t list_size) {
 	/* memset(bm, 0, (BM_BITS + sizeof(char) - 1) / sizeof(char)); */
 
 	while (count < list_size) {
-		set_bit(*(list + count), bm);
+		if (*(list + count) < BM_BITS)
+			set_bit(*(list + count), bm);
 		++count;
 	}
 
