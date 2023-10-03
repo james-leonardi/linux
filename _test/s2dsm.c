@@ -17,7 +17,6 @@ int port_invalid(int port) {
 int setup_server(int port) {
 	int fd;
 	struct sockaddr_in address = {0};
-	socklen_t socklen = sizeof(address);
 
 	if ((fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
 		return -1;
@@ -35,7 +34,7 @@ int setup_server(int port) {
 		return -1;
 	}
 
-	return accept(fd, (struct sockaddr *)&address, &socklen);
+	return fd;
 }
 
 /*
@@ -55,7 +54,11 @@ int setup_client(int port) {
 		return -1;
 	}
 
-	return connect(fd, (struct sockaddr *)&address, sizeof(address));
+	if (connect(fd, (struct sockaddr *)&address, sizeof(address))) {
+		return -1;
+	}
+
+	return fd;
 }
 
 int main(int argc, char **argv) {
