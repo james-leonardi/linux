@@ -14,19 +14,19 @@ int port_invalid(int port) {
  * Creates a socket server on port and returns the fd.
  * Returns -1 on failure.
  */
+struct sockaddr_in saddress = {0};
 int setup_server(int port) {
 	int fd;
-	struct sockaddr_in address = {0};
 
 	if ((fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
 		return -1;
 	}
 
-	address.sin_family = AF_INET;
-	address.sin_addr.s_addr = INADDR_ANY;
-	address.sin_port = htons(port);
+	saddress.sin_family = AF_INET;
+	saddress.sin_addr.s_addr = INADDR_ANY;
+	saddress.sin_port = htons(port);
 	
-	if (bind(fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
+	if (bind(fd, (struct sockaddr *)&saddress, sizeof(saddress)) < 0) {
 		return -1;
 	}
 
@@ -38,23 +38,39 @@ int setup_server(int port) {
 }
 
 /*
- * Creates a socket client on port and returns the fd.
+ * Accepts the next connection and returns the socket fd.
+ * On failure, returns -1.
  */
+int server_get_socket(int server_fd) {
+	int sockfd;
+	socklen_t addrlen = sizeof(struct sockaddr_in);
+
+	if ((sockfd = accept(server_fd, (struct sockaddr *)&saddress, &addrlen)) < 0) {
+		return -1;
+	}
+
+	return sockfd;
+}
+
+/*
+ * Creates a socket client on port and returns the fd
+ * Returns -1 on failure.
+ */
+struct sockaddr_in caddress = {0};
 int setup_client(int port) {
 	int fd;
-	struct sockaddr_in address = {0};
 
 	if ((fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
 		return -1;
 	}
 
-	address.sin_family = AF_INET;
-	address.sin_port = htons(port);
-	if (inet_pton(AF_INET, "127.0.0.1", &address.sin_addr) <= 0) {
+	caddress.sin_family = AF_INET;
+	caddress.sin_port = htons(port);
+	if (inet_pton(AF_INET, "127.0.0.1", &caddress.sin_addr) <= 0) {
 		return -1;
 	}
 
-	if (connect(fd, (struct sockaddr *)&address, sizeof(address))) {
+	if (connect(fd, (struct sockaddr *)&caddress, sizeof(caddress))) {
 		return -1;
 	}
 
@@ -62,25 +78,34 @@ int setup_client(int port) {
 }
 
 int main(int argc, char **argv) {
-	int listen, send;
+	int listenp, sendp;
 
 	if (argc != 3) {
 		printf("Usage: %s <listen port> <send port>\n", *argv);
 		return EXIT_FAILURE;
 	}
 
-	listen = atoi(argv[1]);
-	send = atoi(argv[2]);
+	listenp = atoi(argv[1]);
+	sendp = atoi(argv[2]);
 
-	if (listen == send || port_invalid(listen) || port_invalid(send)) {
+	if (listenp == sendp || port_invalid(listenp) || port_invalid(sendp)) {
 		printf("Please provide two unique ports between 1024-65535\n");
 		return EXIT_FAILURE;
 	}
 
-	int sfd = setup_server(listen);
-	int cfd = setup_client(send);
-
+	int sfd = setup_server(listenp);
+	int cfd = setup_client(sendp);
 	printf("Got listen=%i and send=%i\n", sfd, cfd);
+
+	/* If cfd is -1, this is the first instance.
+	 * In this case, block on accept() until the
+	 * second instance wakes us up. */
+	if (cfd == -1) {
+		printf("New server socket: %i\n", server_get_socket(sfd));
+	} else {
+		send(cfd, "test", 5, 0);
+	}
+	
 	return 0;
 }
 
