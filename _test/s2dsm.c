@@ -5,6 +5,12 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <sys/mman.h>
+
+struct map_info {
+	void *address;
+	size_t length;
+};
 
 int port_invalid(int port) {
 	return port < 1024 || port > 65535;
@@ -97,7 +103,7 @@ int main(int argc, char **argv) {
 
 	server_fd = setup_server(listenp);
 	cfd = setup_client(sendp);
-	fprintf(stderr, "Got server_fd=%i and cfd=%i\n", server_fd, cfd);
+	// fprintf(stderr, "Got server_fd=%i and cfd=%i\n", server_fd, cfd);
 
 	/* If cfd is -1, this is the first instance.
 	 * In this case, block on accept() until the
@@ -105,15 +111,15 @@ int main(int argc, char **argv) {
 	if (cfd == -1) {
 		first = 1;
 		sfd = server_get_socket(server_fd);
-		fprintf(stderr, "sfd: %i\n", sfd);
+		// fprintf(stderr, "sfd: %i\n", sfd);
 		cfd = setup_client(sendp);
-		fprintf(stderr, "Sending byte to %i\n", cfd);
+		// fprintf(stderr, "Sending byte to %i\n", cfd);
 		send(cfd, "", 1, 0);
 	} else {
-		fprintf(stderr, "Sending byte to %i\n", cfd);
+		// fprintf(stderr, "Sending byte to %i\n", cfd);
 		send(cfd, "", 1, 0);
 		sfd = server_get_socket(server_fd);
-		fprintf(stderr, "sfd: %i\n", sfd);
+		// fprintf(stderr, "sfd: %i\n", sfd);
 	}
 
 	/* At this point, both clients can communicate by
@@ -122,17 +128,45 @@ int main(int argc, char **argv) {
 	char temp;
 	read(sfd, &temp, 1);
 
+
+	/* Get the number of pages to allocate, then send to
+	 * waiting second client */
 	if (first) {
+getinput:
 		printf(" > How many pages would you like to allocate (greater than 0)?\n");
 		char *num = malloc(100);
 		fgets(num, 100, stdin);
-		fprintf(stderr, "Received number %i\n", atoi(num));
-		send(cfd, "", 1, 0);
+		long pages = atol(num);
+		free(num);
+		if (pages <= 0) {
+			printf("Invalid input.\n");
+			goto getinput;
+		}
+
+		fprintf(stderr, "Received number %li\n", pages);
+			
+		struct map_info mapping;
+		mapping.length = pages * sysconf(_SC_PAGE_SIZE);
+		mapping.address = mmap(NULL, mapping.length, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (mapping.address == MAP_FAILED) {
+			printf("mmap() failed. Please retry.");
+			exit(EXIT_FAILURE);
+		}
+
+		printf("Map address: %p\nSize: %lu\n", mapping.address, mapping.length);
+		send(cfd, &mapping, sizeof(mapping), 0);
 	} else {
-		read(sfd, &temp, 1);
-		fprintf(stderr, "Shutting down\n");
+		struct map_info mapping;
+		if (read(sfd, &mapping, sizeof(mapping)) < sizeof(mapping)) {
+			printf("read() failed. Please retry.");
+			exit(EXIT_FAILURE);
+		}
+		void *map = mmap(mapping.address, mapping.length, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+		printf("Map address: %p\nSize: %lu\n", map, mapping.length);
 	}
 
+	/* Both processes now have an mmapped region at the same virtual address. */
 
 	return 0;
 }
