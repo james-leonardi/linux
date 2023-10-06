@@ -79,6 +79,8 @@ int setup_client(int port) {
 
 int main(int argc, char **argv) {
 	int listenp, sendp;
+	int server_fd, sfd, cfd;
+	char first = 0;  // Flag to keep track of whether this is the first or second instance
 
 	if (argc != 3) {
 		printf("Usage: %s <listen port> <send port>\n", *argv);
@@ -93,19 +95,45 @@ int main(int argc, char **argv) {
 		return EXIT_FAILURE;
 	}
 
-	int sfd = setup_server(listenp);
-	int cfd = setup_client(sendp);
-	printf("Got listen=%i and send=%i\n", sfd, cfd);
+	server_fd = setup_server(listenp);
+	cfd = setup_client(sendp);
+	fprintf(stderr, "Got server_fd=%i and cfd=%i\n", server_fd, cfd);
 
 	/* If cfd is -1, this is the first instance.
 	 * In this case, block on accept() until the
 	 * second instance wakes us up. */
 	if (cfd == -1) {
-		printf("New server socket: %i\n", server_get_socket(sfd));
+		first = 1;
+		sfd = server_get_socket(server_fd);
+		fprintf(stderr, "sfd: %i\n", sfd);
+		cfd = setup_client(sendp);
+		fprintf(stderr, "Sending byte to %i\n", cfd);
+		send(cfd, "", 1, 0);
 	} else {
-		send(cfd, "test", 5, 0);
+		fprintf(stderr, "Sending byte to %i\n", cfd);
+		send(cfd, "", 1, 0);
+		sfd = server_get_socket(server_fd);
+		fprintf(stderr, "sfd: %i\n", sfd);
 	}
-	
+
+	/* At this point, both clients can communicate by
+	 * sending to cfd, and receiving from sfd.
+	 * We clear out the sync byte, then ask for input. */
+	char temp;
+	read(sfd, &temp, 1);
+
+	if (first) {
+		printf(" > How many pages would you like to allocate (greater than 0)?\n");
+		char *num = malloc(100);
+		fgets(num, 100, stdin);
+		fprintf(stderr, "Received number %i\n", atoi(num));
+		send(cfd, "", 1, 0);
+	} else {
+		read(sfd, &temp, 1);
+		fprintf(stderr, "Shutting down\n");
+	}
+
+
 	return 0;
 }
 
