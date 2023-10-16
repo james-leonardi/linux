@@ -15,6 +15,7 @@
 
 #define S2DSM_BUFLEN 4097
 
+enum msi{ERROR, M, S, I};
 struct map_info {
 	void *address;
 	size_t length;
@@ -200,18 +201,43 @@ void read_pages(struct map_info *map, int page_start, int page_end) {
 	}
 }
 
+char *msi_to_str(enum msi msi) {
+	switch (msi) {
+		case M:
+			return "MODIFIED";
+		case S:
+			return "SHARED";
+		case I:
+			return "INVALID";
+		default:
+			return "ERROR";
+	}
+}
+
+void print_msi_array(enum msi *msi_array, int page_start, int page_end) {
+	enum msi *cursor = msi_array + page_start;
+	while (page_start <= page_end) {
+		printf(" Page %i: %s\n", page_start, msi_to_str(*cursor));
+		page_start++;
+		cursor++;
+	}
+}
+
 void do_service_loop(struct map_info *map) {
 	char inst;
-	int page;
-	int min, max, max_pages = (int)(map->length / sysconf(_SC_PAGE_SIZE));
+	int page, min, max, max_pages = (int)(map->length / sysconf(_SC_PAGE_SIZE));
 	char *buf = malloc(S2DSM_BUFLEN);
+	enum msi *msi_array = malloc(max_pages * sizeof(enum msi));
+	
+	for (int i = 0; i < max_pages; i++)
+		msi_array[i] = I;
 
 	while (1) {
 		/* Get input */
-		printf(" > Which command should I run? (r:read, w:write): ");
+		printf(" > Which command should I run? (r:read, w:write, v:view msi array): ");
 		fgets(buf, S2DSM_BUFLEN, stdin);
 		inst = *buf;
-		if (inst != 'r' && inst != 'w')
+		if (inst != 'r' && inst != 'w' && inst != 'v')
 			continue;
 		printf(" > For which page? (0-%i, or -1 for all): ", max_pages - 1);
 		fgets(buf, S2DSM_BUFLEN, stdin);
@@ -229,13 +255,17 @@ void do_service_loop(struct map_info *map) {
 		}
 
 		/* Do operation */
-		if (inst == 'w') {
-			printf(" > Type your new message: ");
-			fgets(buf, S2DSM_BUFLEN, stdin);
-			write_pages(map, min, max, buf);
-			read_pages(map, min, max);
-		} else {
-			read_pages(map, min, max);
+		switch (inst) {
+			case 'w':
+				printf(" > Type your new message: ");
+				fgets(buf, S2DSM_BUFLEN, stdin);
+				write_pages(map, min, max, buf);
+			case 'r':
+				read_pages(map, min, max);
+				break;
+			case 'v':
+				print_msi_array(msi_array, min, max);
+				break;
 		}
 	}
 	free(buf);
