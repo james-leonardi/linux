@@ -20,6 +20,11 @@ struct map_info {
 	void *address;
 	size_t length;
 };
+struct service_thread_info {
+	struct map_info *map;
+	int send_fd;
+	enum msi *msi_array;
+};
 
 int port_invalid(int port) {
 	return port < 1024 || port > 65535;
@@ -223,14 +228,15 @@ void print_msi_array(enum msi *msi_array, int page_start, int page_end) {
 	}
 }
 
-void do_service_loop(struct map_info *map) {
+void *do_service_loop(void *ptr) {
+	struct service_thread_info *sti = (struct service_thread_info*)ptr;
+	struct map_info *map = sti->map;
+	// int cfd = sti->send_fd;
+	enum msi *msi_array = sti->msi_array;
+	free(sti);
 	char inst;
 	int page, min, max, max_pages = (int)(map->length / sysconf(_SC_PAGE_SIZE));
-	char *buf = malloc(S2DSM_BUFLEN);
-	enum msi *msi_array = malloc(max_pages * sizeof(enum msi));
-	
-	for (int i = 0; i < max_pages; i++)
-		msi_array[i] = I;
+	char *buf = malloc(S2DSM_BUFLEN);	
 
 	while (1) {
 		/* Get input */
@@ -359,16 +365,31 @@ getinput:
 	int *uffd_fd = malloc(sizeof(int));
 	*uffd_fd = setup_uffd(&mapping);
 
-	pthread_t thread;
-	int t = pthread_create(&thread, NULL, fault_handler_thread, uffd_fd);
-	if (t != 0) {
+	pthread_t fault_handler;
+	int fh_t = pthread_create(&fault_handler, NULL, fault_handler_thread, uffd_fd);
+	if (fh_t != 0) {
 		perror("pthread_create");
 		exit(EXIT_FAILURE);
 	}
 
-	/* Enter service loop, in which it asks for an operation on each page */
-	do_service_loop(&mapping);
+	/* Spin off service loop thread, in which it asks for an operation on each page. */
+	int pages = mapping.length / sysconf(_SC_PAGE_SIZE);
+	struct service_thread_info *sti = malloc(sizeof(struct service_thread_info));
+	sti->map = &mapping;
+	sti->send_fd = cfd;
+	sti->msi_array = malloc(sizeof(enum msi) * pages);
+	for (int i = 0; i < pages; i++)
+		sti->msi_array[i] = I;
 
+	pthread_t service_loop;
+	int sl_t = pthread_create(&service_loop, NULL, do_service_loop, sti);
+	if (sl_t != 0) {
+		perror("pthread_create");
+		exit(EXIT_FAILURE);
+	}
+
+	/* Enter loop to listen on server fd for packets */
+	sleep(100000);
 	return 0;
 }
 
