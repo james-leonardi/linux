@@ -13,7 +13,8 @@
 #include <pthread.h>
 #include <sys/ioctl.h>
 
-#define S2DSM_BUFLEN 4097
+#define PGSZ (sysconf(_SC_PAGE_SIZE))
+#define S2DSM_BUFLEN 4096
 
 enum msi{ERROR, M, S, I};
 struct map_info {
@@ -24,6 +25,23 @@ struct service_thread_info {
 	struct map_info *map;
 	int send_fd;
 	enum msi *msi_array;
+};
+struct page_update {
+	int type; /* Type of update
+		* 0 - Call, sending a page update.
+		* 1 - Response, receiving a response to a page update. */
+	int page_no; /* Page this update corresponds to. */
+	enum msi msi_flag; /* The meaning of this flag depends on the 'type':
+       		* Type 0 (Call):
+		* 	- M: 'I modified my page; invalidate yours.'
+		* 	- S: 'My page is invalid; can I have yours?'
+		* 	- I: unused.
+		* Type 1 (Response):
+		* 	- M: 'Acknowledged your 'M'; I have invalidated my page.'
+		* 	- S: 'Here is my page. Update yours and move to 'S'.' 
+		* 	- I: unused. */
+	size_t data_len; /* How much data there is. */
+	char data[]; /* Placeholder for data. */
 };
 
 int port_invalid(int port) {
@@ -144,7 +162,7 @@ void *fault_handler_thread(void *arg) {
 	uffd = *(int*)arg;
 	free(arg);
 
-	page = mmap(NULL, sysconf(_SC_PAGE_SIZE), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	page = mmap(NULL, PGSZ, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (page == MAP_FAILED) {
 		perror("mmap");
 		exit(EXIT_FAILURE);
@@ -176,7 +194,7 @@ void *fault_handler_thread(void *arg) {
 		printf(" [x] PAGEFAULT\n");
 
 		uffdio_range.start = msg.arg.pagefault.address;
-		uffdio_range.len = sysconf(_SC_PAGE_SIZE);
+		uffdio_range.len = PGSZ;
 		uffdio_zeropage.range = uffdio_range;
 		uffdio_zeropage.mode = 0;
 		if (ioctl(uffd, UFFDIO_ZEROPAGE, &uffdio_zeropage) == -1) {
@@ -187,22 +205,22 @@ void *fault_handler_thread(void *arg) {
 }
 
 void write_pages(struct map_info *map, int page_start, int page_end, char *what) {
-	char *cursor = (char*)(map->address) + (sysconf(_SC_PAGE_SIZE) * page_start);
+	char *cursor = (char*)(map->address) + (PGSZ * page_start);
 	while (page_start <= page_end) {
-		memset(cursor, 0, sysconf(_SC_PAGE_SIZE));
+		memset(cursor, 0, PGSZ);
 		strcpy(cursor, what);
 		page_start++;
-		cursor += sysconf(_SC_PAGE_SIZE);
+		cursor += PGSZ;
 	}
 }
 
 void read_pages(struct map_info *map, int page_start, int page_end) {
-	char *cursor = (char*)(map->address) + (sysconf(_SC_PAGE_SIZE) * page_start);
+	char *cursor = (char*)(map->address) + (PGSZ * page_start);
 	while (page_start <= page_end) {
 		*cursor = *cursor;
 		printf(" [*] Page %i:\n%s\n", page_start, cursor);
 		page_start++;
-		cursor += sysconf(_SC_PAGE_SIZE);
+		cursor += PGSZ;
 	}
 }
 
@@ -235,7 +253,7 @@ void *do_service_loop(void *ptr) {
 	enum msi *msi_array = sti->msi_array;
 	free(sti);
 	char inst;
-	int page, min, max, max_pages = (int)(map->length / sysconf(_SC_PAGE_SIZE));
+	int page, min, max, max_pages = (int)(map->length / PGSZ);
 	char *buf = malloc(S2DSM_BUFLEN);	
 
 	while (1) {
@@ -340,7 +358,7 @@ getinput:
 
 		// fprintf(stderr, "Received number %li\n", pages);
 			
-		mapping.length = pages * sysconf(_SC_PAGE_SIZE);
+		mapping.length = pages * PGSZ;
 		mapping.address = mmap(NULL, mapping.length, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 		if (mapping.address == MAP_FAILED) {
 			printf("mmap() failed. Please retry.");
@@ -358,7 +376,10 @@ getinput:
 
 		printf("Map address: %p\nSize: %lu\n", map, mapping.length);
 	}
-
+	int pages = mapping.length / PGSZ;
+	enum msi msi_array[pages];
+	for (int i = 0; i < pages; i++)
+		msi_array[i] = I;
 	/* Both processes now have an mmapped region at the same virtual address. */
 
 	/* Configure userfaultfd */
@@ -373,13 +394,10 @@ getinput:
 	}
 
 	/* Spin off service loop thread, in which it asks for an operation on each page. */
-	int pages = mapping.length / sysconf(_SC_PAGE_SIZE);
 	struct service_thread_info *sti = malloc(sizeof(struct service_thread_info));
 	sti->map = &mapping;
 	sti->send_fd = cfd;
-	sti->msi_array = malloc(sizeof(enum msi) * pages);
-	for (int i = 0; i < pages; i++)
-		sti->msi_array[i] = I;
+	sti->msi_array = &msi_array;
 
 	pthread_t service_loop;
 	int sl_t = pthread_create(&service_loop, NULL, do_service_loop, sti);
@@ -389,7 +407,59 @@ getinput:
 	}
 
 	/* Enter loop to listen on server fd for packets */
-	sleep(100000);
-	return 0;
+	struct page_update *update = malloc(sizeof(struct page_update) + PGSZ);
+	// struct page_update *response = malloc(sizeof(struct page_update) + PGSZ);
+	while (1) {
+		memset(update, 0, sizeof(struct page_update) + PGSZ);
+		// memset(response, 0, sizeof(struct page_update) + PGSZ);
+		if (read(sfd, update, sizeof(struct page_update)) < sizeof(struct page_update)) {
+		       perror("read");
+		       exit(EXIT_FAILURE);
+		}
+		if (read(sfd, update->data, update->data_len) < update->data_len) {
+			perror("read");
+			exit(EXIT_FAILURE);
+		}
+
+		/* Perform operation on msi_array depending on packet received */
+		if (update->type == 0) {
+			/* This is a call, meaning the other process is requesting
+			 * data from us. We need to send an appropriate response. */
+			switch (update->msi_flag) {
+				case M: /* 'I modified my page; invalidate yours.' */
+					if (update->page_no == -1)
+						for (int i = 0; i < pages; i++)
+							msi_array[i] = I;
+					else
+						msi_array[update->page_no] = I;
+					/* Setup acknowledgement. */
+					update->type = 1;
+					update->data_len = 0;
+					write(cfd, update, sizeof(struct page_update));
+					break;
+				case S: /* 'My page is invalid; can I have yours?' */
+					update->type = 1;
+					if (update->page_no == -1) {
+						for (int i = 0; i < pages; i++) {
+							update->data_len = strlen(/* get page len */) + 1;
+						}
+						break;
+					}
+					// update->data = ***get my page***
+					write(cfd, update, sizeof(struct page_update) + update->data_len);
+					break;
+				default:
+					update->type = 1;
+					update->msi_flag = I; /* Unused flag. */
+					update->data_len = 0;
+					write(cfd, update, sizeof(struct page_update));
+			}
+		} else {
+			/* We have received a response. We need to act appropriately
+			 * and do not need to send a response. */
+
+		}
+	}
+	return EXIT_SUCCESS;
 }
 
