@@ -397,7 +397,7 @@ getinput:
 	struct service_thread_info *sti = malloc(sizeof(struct service_thread_info));
 	sti->map = &mapping;
 	sti->send_fd = cfd;
-	sti->msi_array = &msi_array;
+	sti->msi_array = msi_array;
 
 	pthread_t service_loop;
 	int sl_t = pthread_create(&service_loop, NULL, do_service_loop, sti);
@@ -427,11 +427,13 @@ getinput:
 			 * data from us. We need to send an appropriate response. */
 			switch (update->msi_flag) {
 				case M: /* 'I modified my page; invalidate yours.' */
-					if (update->page_no == -1)
-						for (int i = 0; i < pages; i++)
+					if (update->page_no == -1) {
+						for (int i = 0; i < pages; i++) {
 							msi_array[i] = I;
-					else
+						}
+					} else {
 						msi_array[update->page_no] = I;
+					}
 					/* Setup acknowledgement. */
 					update->type = 1;
 					update->data_len = 0;
@@ -439,14 +441,21 @@ getinput:
 					break;
 				case S: /* 'My page is invalid; can I have yours?' */
 					update->type = 1;
+					int min = update->page_no;
+					int max = min + 1;
 					if (update->page_no == -1) {
-						for (int i = 0; i < pages; i++) {
-							update->data_len = strlen(/* get page len */) + 1;
-						}
-						break;
+						min = 0;
+						max = pages;
 					}
-					// update->data = ***get my page***
-					write(cfd, update, sizeof(struct page_update) + update->data_len);
+					/* Send all requested pages. */
+					for (int i = min; i < max; i++) {
+						void *page_addr = mapping.address + (i * PGSZ);
+						size_t len = strlen(page_addr) + 1;
+						update->data_len = len;
+						strcpy(update->data, page_addr);
+						write(cfd, update, sizeof(struct page_update) + update->data_len);
+						msi_array[i] = S; // Should this be here?
+					}
 					break;
 				default:
 					update->type = 1;
@@ -457,7 +466,26 @@ getinput:
 		} else {
 			/* We have received a response. We need to act appropriately
 			 * and do not need to send a response. */
-
+			switch (update->msi_flag) {
+				case M: /* 'Acknowledged your 'M'; I have invalidated my page.' */
+					// Do nothing (can possibly remove the ack)
+					break;
+				case S: /* 'Here is my page. Update yours and move to 'S'. */
+					int min = update->page_no;
+					int max = min + 1;
+					if (update->page_no == -1) {
+						min = 0;
+						max = pages;
+					}
+					/* Read all received pages. */
+					for (int i = min; i < max; i++) {
+						void *page_addr = mapping.address + (i * PGSZ);
+						strcpy(page_addr, update->data);
+						msi_array[i] = S;
+					}
+				default:
+					break;
+			}
 		}
 	}
 	return EXIT_SUCCESS;
