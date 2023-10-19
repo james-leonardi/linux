@@ -445,6 +445,9 @@ getinput:
 			switch (update->msi_flag) {
 				case M: /* 'I modified my page; invalidate yours.' */
 					if (update->page_no == -1) {
+						/* This is technically never used due to the way the process
+						 * sends the request, but we will keep it here in case I
+						 * want to optimize the request sending. */
 						madvise(mapping.address, pages * PGSZ, MADV_DONTNEED);
 						for (int i = 0; i < pages; i++)
 							msi_array[i] = I;
@@ -458,6 +461,7 @@ getinput:
 					write(cfd, update, sizeof(struct page_update));
 					break;
 				case S: /* 'My page is invalid; can I have yours?' */
+					/* This will also only request 1 page at a time, so the range code is unused for now. */
 					update->type = 1;
 					int min = update->page_no;
 					int max = min + 1;
@@ -468,9 +472,13 @@ getinput:
 					/* Send all requested pages. */
 					for (int i = min; i < max; i++) {
 						void *page_addr = mapping.address + (i * PGSZ);
-						size_t len = strlen(page_addr) + 1;
+						/* If our page is also invalid, don't access it and just send 0. */
+						size_t len = 0;
+						if (msi_array[i] != I) {
+							len = strlen(page_addr) + 1;
+							strcpy(update->data, page_addr);
+						}
 						update->data_len = len;
-						strcpy(update->data, page_addr);
 						write(cfd, update, sizeof(struct page_update) + update->data_len);
 						msi_array[i] = S;
 					}
@@ -490,19 +498,13 @@ getinput:
 					break;
 				case S: /* 'Here is my page. Update yours and move to 'S'. */
 					pthread_mutex_lock(&mutex);
-					int min = update->page_no;
-					int max = min + 1;
-					if (update->page_no == -1) {
-						min = 0;
-						max = pages;
-					}
-					/* Read all received pages. */
-					for (int i = min; i < max; i++) {
-						void *page_addr = mapping.address + (i * PGSZ);
+					/* Read the received page. */
+					if (update->data_len > 0) {
+						void *page_addr = mapping.address + (update->page_no * PGSZ);
 						strcpy(page_addr, update->data);
-						msi_array[i] = S;
 					}
-					pthread_cond_signal(&cond);
+					msi_array[update->page_no] = S;
+					pthread_cond_signal(&cond); /* Signal that we're done writing. */
 					pthread_mutex_unlock(&mutex);
 				default:
 					break;
