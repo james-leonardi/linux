@@ -25,6 +25,8 @@ struct service_thread_info {
 	struct map_info *map;
 	int send_fd;
 	enum msi *msi_array;
+	pthread_mutex_t mutex;
+	pthread_cond_t cond;
 };
 struct page_update {
 	int type; /* Type of update
@@ -395,9 +397,13 @@ getinput:
 
 	/* Spin off service loop thread, in which it asks for an operation on each page. */
 	struct service_thread_info *sti = malloc(sizeof(struct service_thread_info));
+	pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+	pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
 	sti->map = &mapping;
 	sti->send_fd = cfd;
 	sti->msi_array = msi_array;
+	sti->mutex = mutex;
+	sti->cond = cond;
 
 	pthread_t service_loop;
 	int sl_t = pthread_create(&service_loop, NULL, do_service_loop, sti);
@@ -471,6 +477,7 @@ getinput:
 					// Do nothing (can possibly remove the ack)
 					break;
 				case S: /* 'Here is my page. Update yours and move to 'S'. */
+					pthread_mutex_lock(&mutex);
 					int min = update->page_no;
 					int max = min + 1;
 					if (update->page_no == -1) {
@@ -483,6 +490,8 @@ getinput:
 						strcpy(page_addr, update->data);
 						msi_array[i] = S;
 					}
+					pthread_mutex_signal(&cond);
+					pthread_mutex_unlock(&mutex);
 				default:
 					break;
 			}
