@@ -154,21 +154,13 @@ int setup_uffd(struct map_info *map) {
  */
 void *fault_handler_thread(void *arg) {
 	int uffd;
-	void *page;
 	struct uffd_msg msg;
-	//struct uffdio_copy uffdio_copy;
 	struct uffdio_zeropage uffdio_zeropage;
 	struct uffdio_range uffdio_range;
 	ssize_t nread;
 
 	uffd = *(int*)arg;
 	free(arg);
-
-	page = mmap(NULL, PGSZ, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-	if (page == MAP_FAILED) {
-		perror("mmap");
-		exit(EXIT_FAILURE);
-	}
 
 	while (1) {
 		struct pollfd pollfd;
