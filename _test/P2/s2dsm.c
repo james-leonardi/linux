@@ -210,6 +210,7 @@ void write_pages(struct map_info *map, int page_start, int page_end, char *what,
 			page_req.msi_flag = M; /* 'I modified my page; invalidate yours.' */
 			page_req.data_len = 0;
 			write(cfd, &page_req, sizeof(struct page_update));
+			map->msi_array[page_start] = M;
 		}
 		memset(cursor, 0, PGSZ);
 		strcpy(cursor, what);
@@ -444,11 +445,12 @@ getinput:
 			switch (update->msi_flag) {
 				case M: /* 'I modified my page; invalidate yours.' */
 					if (update->page_no == -1) {
-						for (int i = 0; i < pages; i++) {
+						madvise(mapping.address, pages * PGSZ, MADV_DONTNEED);
+						for (int i = 0; i < pages; i++)
 							msi_array[i] = I;
-						}
 					} else {
 						msi_array[update->page_no] = I;
+						madvise(mapping.address + (update->page_no * PGSZ), PGSZ, MADV_DONTNEED);
 					}
 					/* Setup acknowledgement. */
 					update->type = 1;
