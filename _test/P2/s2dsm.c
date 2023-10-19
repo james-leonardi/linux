@@ -20,13 +20,13 @@ enum msi{ERROR, M, S, I};
 struct map_info {
 	void *address;
 	size_t length;
+	enum msi *msi_array;
 };
 struct service_thread_info {
 	struct map_info *map;
 	int send_fd;
-	enum msi *msi_array;
-	pthread_mutex_t mutex;
-	pthread_cond_t cond;
+	pthread_mutex_t *mutex;
+	pthread_cond_t *cond;
 };
 struct page_update {
 	int type; /* Type of update
@@ -198,9 +198,19 @@ void *fault_handler_thread(void *arg) {
 	}
 }
 
-void write_pages(struct map_info *map, int page_start, int page_end, char *what) {
+void write_pages(struct map_info *map, int page_start, int page_end, char *what, int cfd) {
 	char *cursor = (char*)(map->address) + (PGSZ * page_start);
 	while (page_start <= page_end) {
+		/* Check if our page is NOT modified. */
+		if (map->msi_array[page_start] != M) {
+			/* Invalidate the page on the other end. */
+			struct page_update page_req;
+			page_req.type = 0;
+			page_req.page_no = page_start;
+			page_req.msi_flag = M; /* 'I modified my page; invalidate yours.' */
+			page_req.data_len = 0;
+			write(cfd, &page_req, sizeof(struct page_update));
+		}
 		memset(cursor, 0, PGSZ);
 		strcpy(cursor, what);
 		page_start++;
@@ -208,9 +218,25 @@ void write_pages(struct map_info *map, int page_start, int page_end, char *what)
 	}
 }
 
-void read_pages(struct map_info *map, int page_start, int page_end) {
+void read_pages(struct map_info *map, int page_start, int page_end,
+		pthread_mutex_t *mutex, pthread_cond_t *cond, int cfd) {
 	char *cursor = (char*)(map->address) + (PGSZ * page_start);
 	while (page_start <= page_end) {
+		/* Check if our page is invalid. */
+		if (map->msi_array[page_start] == I) {
+			/* Fetch page from other process. */
+			pthread_mutex_lock(mutex);
+			struct page_update page_req;
+			page_req.type = 0;
+			page_req.page_no = page_start;
+			page_req.msi_flag = S; /* 'My page is invalid; can I have yours?' */
+			page_req.data_len = 0;
+			write(cfd, &page_req, sizeof(struct page_update));
+			while (map->msi_array[page_start] == I)
+				pthread_cond_wait(cond, mutex); /* Wait for page to be updated. */
+			pthread_mutex_unlock(mutex);
+		}
+		/* Page is valid for our process (M or S state). We can now read it. */
 		*cursor = *cursor;
 		printf(" [*] Page %i:\n%s\n", page_start, cursor);
 		page_start++;
@@ -243,8 +269,9 @@ void print_msi_array(enum msi *msi_array, int page_start, int page_end) {
 void *do_service_loop(void *ptr) {
 	struct service_thread_info *sti = (struct service_thread_info*)ptr;
 	struct map_info *map = sti->map;
-	// int cfd = sti->send_fd;
-	enum msi *msi_array = sti->msi_array;
+	int cfd = sti->send_fd;
+	pthread_mutex_t *mutex = sti->mutex;
+	pthread_cond_t *cond = sti->cond;
 	free(sti);
 	char inst;
 	int page, min, max, max_pages = (int)(map->length / PGSZ);
@@ -277,12 +304,12 @@ void *do_service_loop(void *ptr) {
 			case 'w':
 				printf(" > Type your new message: ");
 				fgets(buf, S2DSM_BUFLEN, stdin);
-				write_pages(map, min, max, buf);
+				write_pages(map, min, max, buf, cfd);
 			case 'r':
-				read_pages(map, min, max);
+				read_pages(map, min, max, mutex, cond, cfd);
 				break;
 			case 'v':
-				print_msi_array(msi_array, min, max);
+				print_msi_array(map->msi_array, min, max);
 				break;
 		}
 	}
@@ -309,7 +336,6 @@ int main(int argc, char **argv) {
 
 	server_fd = setup_server(listenp);
 	cfd = setup_client(sendp);
-	// fprintf(stderr, "Got server_fd=%i and cfd=%i\n", server_fd, cfd);
 
 	/* If cfd is -1, this is the first instance.
 	 * In this case, block on accept() until the
@@ -317,15 +343,11 @@ int main(int argc, char **argv) {
 	if (cfd == -1) {
 		first = 1;
 		sfd = server_get_socket(server_fd);
-		// fprintf(stderr, "sfd: %i\n", sfd);
 		cfd = setup_client(sendp);
-		// fprintf(stderr, "Sending byte to %i\n", cfd);
 		send(cfd, "", 1, 0);
 	} else {
-		// fprintf(stderr, "Sending byte to %i\n", cfd);
 		send(cfd, "", 1, 0);
 		sfd = server_get_socket(server_fd);
-		// fprintf(stderr, "sfd: %i\n", sfd);
 	}
 
 	/* At this point, both clients can communicate by
@@ -350,8 +372,6 @@ getinput:
 			goto getinput;
 		}
 
-		// fprintf(stderr, "Received number %li\n", pages);
-			
 		mapping.length = pages * PGSZ;
 		mapping.address = mmap(NULL, mapping.length, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 		if (mapping.address == MAP_FAILED) {
@@ -374,6 +394,7 @@ getinput:
 	enum msi msi_array[pages];
 	for (int i = 0; i < pages; i++)
 		msi_array[i] = I;
+	mapping.msi_array = msi_array;
 	/* Both processes now have an mmapped region at the same virtual address. */
 
 	/* Configure userfaultfd */
@@ -393,9 +414,8 @@ getinput:
 	pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
 	sti->map = &mapping;
 	sti->send_fd = cfd;
-	sti->msi_array = msi_array;
-	sti->mutex = mutex;
-	sti->cond = cond;
+	sti->mutex = &mutex;
+	sti->cond = &cond;
 
 	pthread_t service_loop;
 	int sl_t = pthread_create(&service_loop, NULL, do_service_loop, sti);
@@ -406,10 +426,8 @@ getinput:
 
 	/* Enter loop to listen on server fd for packets */
 	struct page_update *update = malloc(sizeof(struct page_update) + PGSZ);
-	// struct page_update *response = malloc(sizeof(struct page_update) + PGSZ);
 	while (1) {
 		memset(update, 0, sizeof(struct page_update) + PGSZ);
-		// memset(response, 0, sizeof(struct page_update) + PGSZ);
 		if (read(sfd, update, sizeof(struct page_update)) < sizeof(struct page_update)) {
 		       perror("read");
 		       exit(EXIT_FAILURE);
@@ -452,7 +470,7 @@ getinput:
 						update->data_len = len;
 						strcpy(update->data, page_addr);
 						write(cfd, update, sizeof(struct page_update) + update->data_len);
-						msi_array[i] = S; // Should this be here?
+						msi_array[i] = S;
 					}
 					break;
 				default:
@@ -482,7 +500,7 @@ getinput:
 						strcpy(page_addr, update->data);
 						msi_array[i] = S;
 					}
-					pthread_mutex_signal(&cond);
+					pthread_cond_signal(&cond);
 					pthread_mutex_unlock(&mutex);
 				default:
 					break;
