@@ -14,3 +14,5 @@ install: all
 
 uninstall:
 	rmmod perftop
+
+reinstall: uninstall install
