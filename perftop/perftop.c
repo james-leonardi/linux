@@ -15,11 +15,18 @@ MODULE_DESCRIPTION("CPU Profiler");
 
 /* Declare global variables. */
 static int pre_count, post_count;
+static DEFINE_SPINLOCK(pre_count_lock);
+static DEFINE_SPINLOCK(post_count_lock);
 
 /* Output of proc file. */
 static int perftop_show(struct seq_file *m, void *v)
 {
+	unsigned long pre_flags, post_flags;
+	spin_lock_irqsave(&pre_count_lock, pre_flags);
+	spin_lock_irqsave(&post_count_lock, post_flags);
 	seq_printf(m, "Pre-Count: %i\tPost-Count: %i\n", pre_count, post_count);
+	spin_unlock_irqrestore(&post_count_lock, post_flags);
+	spin_unlock_irqrestore(&pre_count_lock, pre_flags);
 	return 0;
 }
 
@@ -32,13 +39,19 @@ static int perftop_open(struct inode *inode, struct file *file)
 
 static int entry_pick_next_fair(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
+	unsigned long flags;
+	spin_lock_irqsave(&pre_count_lock, flags);
 	pre_count++;
+	spin_unlock_irqrestore(&pre_count_lock, flags);
 	return 0;
 }
 
 static int ret_pick_next_fair(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
+	unsigned long flags;
+	spin_lock_irqsave(&post_count_lock, flags);
 	post_count++;
+	spin_unlock_irqrestore(&post_count_lock, flags);
 	return 0;
 }
 
@@ -53,7 +66,6 @@ static struct kretprobe cfs_probe =
 {
 	.entry_handler = entry_pick_next_fair,
 	.handler = ret_pick_next_fair,
-	.maxactive = 10,
 };
 
 static int __init perftop_init(void)
