@@ -14,7 +14,8 @@ MODULE_DESCRIPTION("CPU Profiler");
 // extern struct task_struct *pick_next_task_fair(struct rq *rq, struct task_struct *prev, struct rq_flags *rf);
 
 /* Declare global variables. */
-static int pre_count, post_count;
+static int pre_count, post_count, context_switch_count;
+static pid_t prev_pid;
 static DEFINE_SPINLOCK(pre_count_lock);
 static DEFINE_SPINLOCK(post_count_lock);
 
@@ -24,7 +25,8 @@ static int perftop_show(struct seq_file *m, void *v)
 	unsigned long pre_flags, post_flags;
 	spin_lock_irqsave(&pre_count_lock, pre_flags);
 	spin_lock_irqsave(&post_count_lock, post_flags);
-	seq_printf(m, "Pre-Count: %i\tPost-Count: %i\n", pre_count, post_count);
+	seq_printf(m, "Pre-Count: %i\tPost-Count: %i\tContext Switches:%i\n",
+			pre_count, post_count, context_switch_count);
 	spin_unlock_irqrestore(&post_count_lock, post_flags);
 	spin_unlock_irqrestore(&pre_count_lock, pre_flags);
 	return 0;
@@ -43,6 +45,7 @@ static int entry_pick_next_fair(struct kretprobe_instance *ri, struct pt_regs *r
 	spin_lock_irqsave(&pre_count_lock, flags);
 	pre_count++;
 	spin_unlock_irqrestore(&pre_count_lock, flags);
+	prev_pid = current->pid;
 	return 0;
 }
 
@@ -51,6 +54,8 @@ static int ret_pick_next_fair(struct kretprobe_instance *ri, struct pt_regs *reg
 	unsigned long flags;
 	spin_lock_irqsave(&post_count_lock, flags);
 	post_count++;
+	if (prev_pid != current->pid)
+		context_switch_count++;
 	spin_unlock_irqrestore(&post_count_lock, flags);
 	return 0;
 }
