@@ -13,9 +13,11 @@ MODULE_DESCRIPTION("CPU Profiler");
 /* Declare the internal pick_next_task_fair() function. */
 // extern struct task_struct *pick_next_task_fair(struct rq *rq, struct task_struct *prev, struct rq_flags *rf);
 
+//#define REGS_TO_TASK ((struct task_struct*)(regs->sp & ~(THREAD_SIZE - 1)))
+//#define REGS_TO_TASK ((struct task_struct*)(regs->sp - sizeof(struct task_struct)))
+
 /* Declare global variables. */
 static int pre_count, post_count, context_switch_count;
-static pid_t prev_pid;
 static DEFINE_SPINLOCK(pre_count_lock);
 static DEFINE_SPINLOCK(post_count_lock);
 
@@ -42,20 +44,47 @@ static int perftop_open(struct inode *inode, struct file *file)
 static int entry_pick_next_fair(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
 	unsigned long flags;
+	struct task_struct *prev_task;
+	//struct task_struct *test_task;
+
+	/* Increment pre_count */
 	spin_lock_irqsave(&pre_count_lock, flags);
 	pre_count++;
 	spin_unlock_irqrestore(&pre_count_lock, flags);
-	prev_pid = current->pid;
+
+	/* Retrieve previous task PID */
+	prev_task = (struct task_struct*)regs->si;
+
+	/* Set kretprobe data */
+	memcpy(ri->data, prev_task, sizeof(struct task_struct));
+	//test_task = (struct task_struct*)ri->data;
+	//printk(KERN_INFO "[perftop] %i\t%i\n", prev_task->pid, test_task->pid);
 	return 0;
 }
 
 static int ret_pick_next_fair(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
 	unsigned long flags;
+	struct task_struct *prev_task, *next_task;
+
+	/* Increment post_count */
 	spin_lock_irqsave(&post_count_lock, flags);
 	post_count++;
-	if (prev_pid != current->pid)
+
+	/* Retrieve task structs */
+	next_task = (struct task_struct*)regs->ax;
+	prev_task = (struct task_struct*)ri->data;
+	if (!prev_task || !next_task)
+		goto null_task;
+
+	/* Compare PIDs */
+	//printk(KERN_INFO "[perftop 2] %i\t->\t%i\n", prev_task->pid, next_task->pid);		
+	if (prev_task->pid != next_task->pid) {
 		context_switch_count++;
+//		printk(KERN_INFO "[perftop]\t[%i %i]\t%i\t->\t%i\n", prev_task->cpu, next_task->cpu, prev_task->pid, next_task->pid);
+	}
+
+null_task:
 	spin_unlock_irqrestore(&post_count_lock, flags);
 	return 0;
 }
@@ -71,6 +100,7 @@ static struct kretprobe cfs_probe =
 {
 	.entry_handler = entry_pick_next_fair,
 	.handler = ret_pick_next_fair,
+	.data_size = sizeof(struct task_struct),
 };
 
 static int __init perftop_init(void)
