@@ -5,6 +5,7 @@
 #include <linux/seq_file.h>
 #include <linux/kprobes.h>
 #include <linux/sched.h>
+#include <linux/slab.h>
 #include <linux/hashtable.h>
 #include <linux/rbtree.h>
 
@@ -30,20 +31,6 @@ static DEFINE_SPINLOCK(pre_count_lock);
 static DEFINE_SPINLOCK(post_count_lock);
 static DECLARE_HASHTABLE(start_tsc, 10); /* Used to translate PID -> start TSC */
 static struct rb_root total_tsc = RB_ROOT; /* Used to keep track of total TSC */
-
-/* Declare global structs. */
-static const struct proc_ops perftop_ops = {
-	.proc_open = perftop_open,
-	.proc_read = seq_read,
-	.proc_lseek = seq_lseek,
-	.proc_release = single_release,
-};
-static struct kretprobe cfs_probe =
-{
-	.entry_handler = entry_pick_next_fair,
-	.handler = ret_pick_next_fair,
-	.data_size = sizeof(struct task_struct),
-};
 
 /** Declare functions. **/
 /* Read 'rdtsc' and return its value. */
@@ -81,7 +68,7 @@ static void set_pid_starttsc(pid_t pid, unsigned long tsc, struct pid_starttsc *
 static struct pid_totaltsc *get_pid_totaltsc(pid_t pid)
 {
 	struct pid_totaltsc *cursor, *temp;
-	rbtree_postorder_for_each_entry_safe(cursor, temp, total_tsc, node) {
+	rbtree_postorder_for_each_entry_safe(cursor, temp, &total_tsc, node) {
 		if (cursor->pid == pid)
 			return cursor;
 	}
@@ -89,10 +76,13 @@ static struct pid_totaltsc *get_pid_totaltsc(pid_t pid)
 }
 
 /* Update the total running time for the given pid. */
-static void set_pid_totaltsc(pid_t pid, unsigned long tsc, struct pid_totaltsc *ptr)
+static void add_pid_totaltsc(pid_t pid, unsigned long to_add, struct pid_totaltsc *ptr)
 {
+	struct rb_node **new, *parent;
+	
 	/* Remove old entry into rbtree. */
 	if (ptr) {
+		to_add += ptr->total_tsc;
 		rb_erase(&ptr->node, &total_tsc);
 		kfree(ptr);
 	}
@@ -100,13 +90,14 @@ static void set_pid_totaltsc(pid_t pid, unsigned long tsc, struct pid_totaltsc *
 	/* Insert new node with value tsc. */
 	ptr = kmalloc(sizeof(struct pid_totaltsc), GFP_KERNEL);
 	ptr->pid = pid;
-	ptr->total_tsc = tsc;
+	ptr->total_tsc = to_add;
 
-	struct rb_node **new = &(root.rb_node), *parent = NULL;
+	new = &total_tsc.rb_node;
+       	parent = NULL;
 	while (*new) {
 		struct pid_totaltsc *this = container_of(*new, struct pid_totaltsc, node);
 		parent = *new;
-		if (this->total_tsc < ptr->tsc)
+		if (this->total_tsc < ptr->total_tsc)
 			new = &((*new)->rb_left);
 		else
 			new = &((*new)->rb_right);
@@ -156,8 +147,10 @@ static int entry_pick_next_fair(struct kretprobe_instance *ri, struct pt_regs *r
 
 static int ret_pick_next_fair(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
-	unsigned long flags;
+	unsigned long flags, current_tsc, elapsed_time;
 	struct task_struct *prev_task, *next_task;
+	struct pid_starttsc *prev_start, *next_start;
+	struct pid_totaltsc *prev_total;
 
 	/* Increment post_count */
 	spin_lock_irqsave(&post_count_lock, flags);
@@ -176,21 +169,16 @@ static int ret_pick_next_fair(struct kretprobe_instance *ri, struct pt_regs *reg
 	/* At this point, there has been a context switch.
 	 * Increment the counter and prepare to calculate tsc. */
 	context_switch_count++;
-	unsigned long current_tsc = get_rdtsc(); /* Timestamp this moment for comparisons. */
+	current_tsc = get_rdtsc(); /* Timestamp this moment for comparisons. */
 
 	/* Retrieve the prev_task start and total time. */
-	struct pid_starttsc *prev_start = get_pid_starttsc(prev_task->pid);
-	struct pid_totaltsc *prev_total = get_pid_totaltsc(prev_task->pid);
+	prev_start = get_pid_starttsc(prev_task->pid);
+	prev_total = get_pid_totaltsc(prev_task->pid);
+	elapsed_time = prev_start ? current_tsc - prev_start->start_tsc : 0;
+	add_pid_totaltsc(prev_task->pid, elapsed_time, prev_total);
 
-	if (prev_start) {
-		/* Prev task was registered. Update its total time entry. */
-
-	}
-
-	/* Retrieve the next_task start time. */
-	struct pid_starttsc *next_start = get_pid_starttsc(next_task->pid);
-//	struct pid_totaltsc *next_total = get_pid_totaltsc(next_task->pid);
-	/* Update next_task start and total time. */
+	/* Retrieve and update the next_task start time. */
+	next_start = get_pid_starttsc(next_task->pid);
 	set_pid_starttsc(next_task->pid, current_tsc, next_start);
 
 null_task:
@@ -199,6 +187,21 @@ no_context_switch:
 	return 0;
 }
 
+/* Declare structs */
+static const struct proc_ops perftop_ops = {
+	.proc_open = perftop_open,
+	.proc_read = seq_read,
+	.proc_lseek = seq_lseek,
+	.proc_release = single_release,
+};
+static struct kretprobe cfs_probe =
+{
+	.entry_handler = entry_pick_next_fair,
+	.handler = ret_pick_next_fair,
+	.data_size = sizeof(struct task_struct),
+};
+
+/* Entry/exit functions */
 static int __init perftop_init(void)
 {
 	/* Create proc file. */
