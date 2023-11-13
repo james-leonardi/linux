@@ -66,6 +66,17 @@ static struct pid_starttsc *get_pid_starttsc(pid_t pid)
 	return NULL;
 }
 
+/* Set the start time for the given struct. */
+static void set_pid_starttsc(pid_t pid, unsigned long tsc, struct pid_starttsc *ptr)
+{
+	if (!ptr) {
+		ptr = kmalloc(sizeof(struct pid_starttsc), GFP_KERNEL);
+		ptr->pid = pid;
+		hash_add(start_tsc, &ptr->node, ptr->pid);
+	}
+	ptr->start_tsc = tsc;
+}
+
 /* Get the entry into the rbtree for the given pid. */
 static struct pid_totaltsc *get_pid_totaltsc(pid_t pid)
 {
@@ -75,6 +86,34 @@ static struct pid_totaltsc *get_pid_totaltsc(pid_t pid)
 			return cursor;
 	}
 	return NULL;
+}
+
+/* Update the total running time for the given pid. */
+static void set_pid_totaltsc(pid_t pid, unsigned long tsc, struct pid_totaltsc *ptr)
+{
+	/* Remove old entry into rbtree. */
+	if (ptr) {
+		rb_erase(&ptr->node, &total_tsc);
+		kfree(ptr);
+	}
+
+	/* Insert new node with value tsc. */
+	ptr = kmalloc(sizeof(struct pid_totaltsc), GFP_KERNEL);
+	ptr->pid = pid;
+	ptr->total_tsc = tsc;
+
+	struct rb_node **new = &(root.rb_node), *parent = NULL;
+	while (*new) {
+		struct pid_totaltsc *this = container_of(*new, struct pid_totaltsc, node);
+		parent = *new;
+		if (this->total_tsc < ptr->tsc)
+			new = &((*new)->rb_left);
+		else
+			new = &((*new)->rb_right);
+	}
+
+	rb_link_node(&ptr->node, parent, new);
+	rb_insert_color(&ptr->node, &total_tsc);
 }
 
 /* Output of proc file. */
@@ -137,11 +176,22 @@ static int ret_pick_next_fair(struct kretprobe_instance *ri, struct pt_regs *reg
 	/* At this point, there has been a context switch.
 	 * Increment the counter and prepare to calculate tsc. */
 	context_switch_count++;
-	//unsigned long current_tsc = get_rdtsc(); /* Timestamp this moment for comparisons. */
+	unsigned long current_tsc = get_rdtsc(); /* Timestamp this moment for comparisons. */
 
-	/* Retrieve the prev_task running time using hashtable. */
+	/* Retrieve the prev_task start and total time. */
 	struct pid_starttsc *prev_start = get_pid_starttsc(prev_task->pid);
+	struct pid_totaltsc *prev_total = get_pid_totaltsc(prev_task->pid);
 
+	if (prev_start) {
+		/* Prev task was registered. Update its total time entry. */
+
+	}
+
+	/* Retrieve the next_task start time. */
+	struct pid_starttsc *next_start = get_pid_starttsc(next_task->pid);
+//	struct pid_totaltsc *next_total = get_pid_totaltsc(next_task->pid);
+	/* Update next_task start and total time. */
+	set_pid_starttsc(next_task->pid, current_tsc, next_start);
 
 null_task:
 no_context_switch:
