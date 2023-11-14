@@ -17,11 +17,13 @@ MODULE_DESCRIPTION("CPU Profiler");
 struct pid_starttsc {
 	pid_t pid;
 	unsigned long start_tsc;
+	int cpu;
 	struct hlist_node node;
 };
 struct pid_totaltsc {
 	pid_t pid;
 	unsigned long total_tsc;
+	char *process_name;
 	struct rb_node node;
 };
 
@@ -42,6 +44,29 @@ static unsigned long get_rdtsc(void)
 	return lo;
 }
 
+static void print_starttsc(void)
+{
+	int bucket;
+	struct pid_starttsc *entry;
+	unsigned long curr_tsc = get_rdtsc();
+	printk(KERN_INFO "\n\n\nACTIVE TASKS:\n");
+	hash_for_each(start_tsc, bucket, entry, node) {
+		if (1 + entry->cpu)
+			printk(KERN_INFO "PID: %i\tCPU: %i\tRUNTIME: %lu\n", entry->pid, entry->cpu, curr_tsc - entry->start_tsc);
+		// printk(KERN_INFO "PID: %i\tACTIVE:%hiRUNTIME:%lu\n", entry->pid, entry->active, curr_tsc - entry->start_tsc);
+	}
+}
+
+static void print_totaltsc(void)
+{
+	struct rb_node *node;
+	printk(KERN_INFO "\n\n\nRBTREE:\n");
+	for (node = rb_first(&total_tsc); node; node = rb_next(node)) {
+		struct pid_totaltsc *entry = rb_entry(node, struct pid_totaltsc, node);
+		printk(KERN_INFO "PID: %i\tTIME: %lu\tNAME: %s\n", entry->pid, entry->total_tsc, entry->process_name);
+	}
+}
+
 /* Get the entry into the hashtable for the given pid. */
 static struct pid_starttsc *get_pid_starttsc(pid_t pid)
 {
@@ -50,19 +75,25 @@ static struct pid_starttsc *get_pid_starttsc(pid_t pid)
 		if (cursor->pid == pid)
 			return cursor;
 	}
-	return NULL;
+	/* Not found; create new node and insert. */
+	struct pid_starttsc *new = kmalloc(sizeof(struct pid_starttsc));
+	new->pid = pid;
+	new->cpu = -1;
+	hash_add(start_tsc, &new->node, pid);
+	return new;
 }
 
 /* Set the start time for the given struct. */
-static void set_pid_starttsc(pid_t pid, unsigned long tsc, struct pid_starttsc *ptr)
+/*static void set_pid_starttsc(pid_t pid, unsigned long tsc, int cpu, struct pid_starttsc *ptr)
 {
-	if (!ptr) {
-		ptr = kmalloc(sizeof(struct pid_starttsc), GFP_KERNEL);
-		ptr->pid = pid;
-		hash_add(start_tsc, &ptr->node, ptr->pid);
-	}
+//	if (!ptr) {
+//		ptr = kmalloc(sizeof(struct pid_starttsc), GFP_NOWAIT);
+//		ptr->pid = pid;
+//		hash_add(start_tsc, &ptr->node, ptr->pid);
+//	}
 	ptr->start_tsc = tsc;
-}
+	ptr->cpu = cpu;
+}*/
 
 /* Get the entry into the rbtree for the given pid. */
 static struct pid_totaltsc *get_pid_totaltsc(pid_t pid)
@@ -76,7 +107,7 @@ static struct pid_totaltsc *get_pid_totaltsc(pid_t pid)
 }
 
 /* Update the total running time for the given pid. */
-static void add_pid_totaltsc(pid_t pid, unsigned long to_add, struct pid_totaltsc *ptr)
+static void insert_pid_totaltsc(pid_t pid, unsigned long to_add, char *name, struct pid_totaltsc *ptr)
 {
 	struct rb_node **new, *parent;
 	
@@ -84,13 +115,14 @@ static void add_pid_totaltsc(pid_t pid, unsigned long to_add, struct pid_totalts
 	if (ptr) {
 		to_add += ptr->total_tsc;
 		rb_erase(&ptr->node, &total_tsc);
-		kfree(ptr);
+	} else {
+		ptr = kmalloc(sizeof(struct pid_totaltsc), GFP_NOWAIT);
+		ptr->pid = pid;
 	}
 
 	/* Insert new node with value tsc. */
-	ptr = kmalloc(sizeof(struct pid_totaltsc), GFP_KERNEL);
-	ptr->pid = pid;
 	ptr->total_tsc = to_add;
+	ptr->process_name = name;
 
 	new = &total_tsc.rb_node;
        	parent = NULL;
@@ -147,7 +179,7 @@ static int entry_pick_next_fair(struct kretprobe_instance *ri, struct pt_regs *r
 
 static int ret_pick_next_fair(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
-	unsigned long flags, current_tsc, elapsed_time;
+	unsigned long flags, current_tsc, elapsed_time, prev_new_total;
 	struct task_struct *prev_task, *next_task;
 	struct pid_starttsc *prev_start, *next_start;
 	struct pid_totaltsc *prev_total;
