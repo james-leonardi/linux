@@ -24,6 +24,7 @@ struct pid_totaltsc {
 	pid_t pid;
 	unsigned long total_tsc;
 	char *process_name;
+	bool running;
 	struct rb_node node;
 };
 
@@ -69,13 +70,14 @@ static void print_totaltsc(void)
 */
 
 /* Get the entry into the hashtable for the given pid. */
-static struct pid_starttsc *get_pid_starttsc(pid_t pid)
+static struct pid_starttsc *get_pid_starttsc(pid_t pid, bool create)
 {
 	struct pid_starttsc *entry;
 	hash_for_each_possible(start_tsc, entry, node, pid) {
 		if (entry->pid == pid)
 			return entry;
 	}
+	if (!create) return NULL;
 	/* Not found; create new node and insert. */
 	entry = kmalloc(sizeof(struct pid_starttsc), GFP_NOWAIT);
 	entry->pid = pid;
@@ -86,13 +88,14 @@ static struct pid_starttsc *get_pid_starttsc(pid_t pid)
 }
 
 /* Get the entry into the rbtree for the given pid. */
-static struct pid_totaltsc *get_pid_totaltsc(pid_t pid)
+static struct pid_totaltsc *get_pid_totaltsc(pid_t pid, bool create)
 {
 	struct pid_totaltsc *entry, *temp;
 	rbtree_postorder_for_each_entry_safe(entry, temp, &total_tsc, node) {
 		if (entry->pid == pid)
 			return entry;
 	}
+	if (!create) return NULL;
 	/* Not found; create new node and return. */
 	entry = kmalloc(sizeof(struct pid_totaltsc), GFP_NOWAIT);
 	entry->pid = pid;
@@ -103,11 +106,11 @@ static struct pid_totaltsc *get_pid_totaltsc(pid_t pid)
 }
 
 /* Update the total running time for the given pid. */
-static void insert_pid_totaltsc(struct pid_totaltsc *ptr)
+static void insert_pid_totaltsc(struct pid_totaltsc *ptr, bool erase_old)
 {
 	struct rb_node **new = &total_tsc.rb_node, *parent = NULL;
 
-	if (ptr->process_name)
+	if (erase_old)
 		rb_erase(&ptr->node, &total_tsc);
 
 	while (*new) {
@@ -133,8 +136,8 @@ static int perftop_show(struct seq_file *m, void *v)
 	spin_lock_irqsave(&post_count_lock, post_flags);
 	for (node = rb_first(&total_tsc), count = 0; node && count < 10; node = rb_next(node), count++) {
 		struct pid_totaltsc *entry = rb_entry(node, struct pid_totaltsc, node);
-		seq_printf(m, "PID: %-5i\tTotalTSC: %-16lu\tTaskName: %s\n",
-			entry->pid, entry->total_tsc, entry->process_name);
+		seq_printf(m, "PID: %-5i\tTotalTSC: %-16lu%s\tTaskName: %s\n",
+			entry->pid, entry->total_tsc, entry->running ? "*" : "", entry->process_name);
 	}
 	spin_unlock_irqrestore(&post_count_lock, post_flags);
 	spin_unlock_irqrestore(&pre_count_lock, pre_flags);
@@ -171,7 +174,7 @@ static int ret_pick_next_fair(struct kretprobe_instance *ri, struct pt_regs *reg
 	unsigned long flags, current_tsc;
 	struct task_struct *prev_task, *next_task;
 	struct pid_starttsc *prev_start, *next_start;
-	struct pid_totaltsc *prev_total;
+	struct pid_totaltsc *prev_total, *next_total;
 
 	/* Increment post_count */
 	spin_lock_irqsave(&post_count_lock, flags);
@@ -193,22 +196,27 @@ static int ret_pick_next_fair(struct kretprobe_instance *ri, struct pt_regs *reg
 	current_tsc = get_rdtsc(); /* Timestamp this moment for comparisons. */
 
 	/* Retrieve and update the prev_task start/total time. */
-	prev_start = get_pid_starttsc(prev_task->pid); /* prev_start->cpu == -1 only if it's a new struct. */
-	prev_total = get_pid_totaltsc(prev_task->pid);
+	prev_start = get_pid_starttsc(prev_task->pid, true); /* prev_start->cpu == -1 only if it's a new struct. */
+	prev_total = get_pid_totaltsc(prev_task->pid, true);
 	if (prev_start->cpu > -1) /* prev_start->start_tsc only has meaning if it's not a new struct */
 		prev_total->total_tsc += current_tsc - prev_start->start_tsc;
 	prev_start->cpu = -1;
-	/* Ordering matters here! If prev_task->comm is set, it will try to remove it from the rb_tree. */
-	insert_pid_totaltsc(prev_total);
+	prev_total->running = 0;
+	/* Ordering matters here! If prev_total->process_name is set, it will try to remove it from the rb_tree. */
+	insert_pid_totaltsc(prev_total, prev_total->process_name ? true : false);
 	if (!prev_total->process_name) {
 		prev_total->process_name = kmalloc(strlen(prev_task->comm) + 1, GFP_NOWAIT);
 		strcpy(prev_total->process_name, prev_task->comm);
 	}
 
 	/* Retrieve and update the next_task start time. */
-	next_start = get_pid_starttsc(next_task->pid);
+	next_start = get_pid_starttsc(next_task->pid, true);
 	next_start->start_tsc = current_tsc;
 	next_start->cpu = next_task->cpu;
+	/* Optional: keep track of active tasks. */
+	next_total = get_pid_totaltsc(next_task->pid, false);
+	if (next_total)
+		next_total->running = 1;
 
 null_task:
 no_context_switch:
