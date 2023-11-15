@@ -127,10 +127,15 @@ static void insert_pid_totaltsc(struct pid_totaltsc *ptr)
 static int perftop_show(struct seq_file *m, void *v)
 {
 	unsigned long pre_flags, post_flags;
+	int count;
+	struct rb_node *node;
 	spin_lock_irqsave(&pre_count_lock, pre_flags);
 	spin_lock_irqsave(&post_count_lock, post_flags);
-	seq_printf(m, "Pre-Count: %i\tPost-Count: %i\tContext Switches:%i\n",
-			pre_count, post_count, context_switch_count);
+	for (node = rb_first(&total_tsc), count = 0; node && count < 10; node = rb_next(node), count++) {
+		struct pid_totaltsc *entry = rb_entry(node, struct pid_totaltsc, node);
+		seq_printf(m, "PID: %i\tTotalTSC: %lu\tTaskName: %s\n",
+			entry->pid, entry->total_tsc, entry->process_name);
+	}
 	spin_unlock_irqrestore(&post_count_lock, post_flags);
 	spin_unlock_irqrestore(&pre_count_lock, pre_flags);
 	return 0;
