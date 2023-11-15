@@ -133,7 +133,7 @@ static int perftop_show(struct seq_file *m, void *v)
 	spin_lock_irqsave(&post_count_lock, post_flags);
 	for (node = rb_first(&total_tsc), count = 0; node && count < 10; node = rb_next(node), count++) {
 		struct pid_totaltsc *entry = rb_entry(node, struct pid_totaltsc, node);
-		seq_printf(m, "PID: %i\tTotalTSC: %lu\tTaskName: %s\n",
+		seq_printf(m, "PID: %-5i\tTotalTSC: %-16lu\tTaskName: %s\n",
 			entry->pid, entry->total_tsc, entry->process_name);
 	}
 	spin_unlock_irqrestore(&post_count_lock, post_flags);
@@ -200,7 +200,10 @@ static int ret_pick_next_fair(struct kretprobe_instance *ri, struct pt_regs *reg
 	prev_start->cpu = -1;
 	/* Ordering matters here! If prev_task->comm is set, it will try to remove it from the rb_tree. */
 	insert_pid_totaltsc(prev_total);
-	prev_total->process_name = prev_task->comm;
+	if (!prev_total->process_name) {
+		prev_total->process_name = kmalloc(strlen(prev_task->comm) + 1, GFP_NOWAIT);
+		strcpy(prev_total->process_name, prev_task->comm);
+	}
 
 	/* Retrieve and update the next_task start time. */
 	next_start = get_pid_starttsc(next_task->pid);
