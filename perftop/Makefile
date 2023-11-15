@@ -9,10 +9,10 @@ all: perftop.c
 clean:
 	make -C $(KDIR) M=$(PWD) modules
 
-install:
+install: all
 	insmod perftop.ko
 
 uninstall:
 	rmmod perftop
 
-reinstall: uninstall all install
+reinstall: uninstall install

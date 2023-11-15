@@ -44,6 +44,7 @@ static unsigned long get_rdtsc(void)
 	return lo;
 }
 
+/* DEBUG FUNCTIONS
 static void print_starttsc(void)
 {
 	int bucket;
@@ -53,7 +54,6 @@ static void print_starttsc(void)
 	hash_for_each(start_tsc, bucket, entry, node) {
 		if (1 + entry->cpu)
 			printk(KERN_INFO "PID: %i\tCPU: %i\tRUNTIME: %lu\n", entry->pid, entry->cpu, curr_tsc - entry->start_tsc);
-		// printk(KERN_INFO "PID: %i\tACTIVE:%hiRUNTIME:%lu\n", entry->pid, entry->active, curr_tsc - entry->start_tsc);
 	}
 }
 
@@ -66,6 +66,7 @@ static void print_totaltsc(void)
 		printk(KERN_INFO "PID: %i\tTIME: %lu\tNAME: %s\n", entry->pid, entry->total_tsc, entry->process_name);
 	}
 }
+*/
 
 /* Get the entry into the hashtable for the given pid. */
 static struct pid_starttsc *get_pid_starttsc(pid_t pid)
@@ -79,8 +80,8 @@ static struct pid_starttsc *get_pid_starttsc(pid_t pid)
 	entry = kmalloc(sizeof(struct pid_starttsc), GFP_NOWAIT);
 	entry->pid = pid;
 	entry->cpu = -1;
-	/* entry->start_tsc left uninitialized. */
 	hash_add(start_tsc, &entry->node, pid);
+	/* entry->start_tsc left uninitialized. */
 	return entry;
 }
 
@@ -96,7 +97,8 @@ static struct pid_totaltsc *get_pid_totaltsc(pid_t pid)
 	entry = kmalloc(sizeof(struct pid_totaltsc), GFP_NOWAIT);
 	entry->pid = pid;
 	entry->total_tsc = 0;
-	/* entry->node and entry->process_name left uninitialized. */
+	entry->process_name = NULL;
+	/* entry->node left uninitialized. */
 	return entry;
 }
 
@@ -105,7 +107,7 @@ static void insert_pid_totaltsc(struct pid_totaltsc *ptr)
 {
 	struct rb_node **new = &total_tsc.rb_node, *parent = NULL;
 
-	if (ptr->total_tsc)
+	if (ptr->process_name)
 		rb_erase(&ptr->node, &total_tsc);
 
 	while (*new) {
@@ -186,14 +188,14 @@ static int ret_pick_next_fair(struct kretprobe_instance *ri, struct pt_regs *reg
 	current_tsc = get_rdtsc(); /* Timestamp this moment for comparisons. */
 
 	/* Retrieve and update the prev_task start/total time. */
-	prev_start = get_pid_starttsc(prev_task->pid);
+	prev_start = get_pid_starttsc(prev_task->pid); /* prev_start->cpu == -1 only if it's a new struct. */
 	prev_total = get_pid_totaltsc(prev_task->pid);
-	if (prev_start->cpu == -1)
-		prev_total->process_name = prev_task->comm;
-	else
+	if (prev_start->cpu > -1) /* prev_start->start_tsc only has meaning if it's not a new struct */
 		prev_total->total_tsc += current_tsc - prev_start->start_tsc;
-	insert_pid_totaltsc(prev_total);
 	prev_start->cpu = -1;
+	/* Ordering matters here! If prev_task->comm is set, it will try to remove it from the rb_tree. */
+	insert_pid_totaltsc(prev_total);
+	prev_total->process_name = prev_task->comm;
 
 	/* Retrieve and update the next_task start time. */
 	next_start = get_pid_starttsc(next_task->pid);
@@ -207,7 +209,8 @@ no_context_switch:
 }
 
 /* Declare structs */
-static const struct proc_ops perftop_ops = {
+static const struct proc_ops perftop_ops =
+{
 	.proc_open = perftop_open,
 	.proc_read = seq_read,
 	.proc_lseek = seq_lseek,
