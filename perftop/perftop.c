@@ -138,8 +138,8 @@ static int perftop_show(struct seq_file *m, void *v)
 		entry_tsc = entry->total_tsc;
 		if (entry_start->cpu > -1)
 			entry_tsc += curr_tsc - entry_start->start_tsc;
-		seq_printf(m, "PID: %-5i\tTotalTSC: %-16lu\tCPU: %-2i\tTaskName: %s\n",
-			entry->pid, entry->total_tsc, entry_start->cpu, entry->process_name);
+		seq_printf(m, "PID: %-5i\tTotalTSC: %-16lu\tCPU: %2i\tTaskName: %s\n",
+			entry->pid, entry_tsc, entry_start->cpu, entry->process_name);
 	}
 	spin_unlock_irqrestore(&post_count_lock, post_flags);
 	spin_unlock_irqrestore(&pre_count_lock, pre_flags);
@@ -185,19 +185,17 @@ static int ret_pick_next_fair(struct kretprobe_instance *ri, struct pt_regs *reg
 	/* Retrieve task structs */
 	next_task = (struct task_struct*)regs->ax;
 	prev_task = (struct task_struct*)ri->data;
-	if (!prev_task || !next_task)
-		goto null_task;
-
-	/* Compare PIDs */
-	if (prev_task->pid == next_task->pid)
+	if (prev_task && next_task && prev_task->pid == next_task->pid)
 		goto no_context_switch;
-	
+
 	/* At this point, there has been a context switch.
-	 * Increment the counter and prepare to calculate tsc. */
+	 * However, either prev_task or next_task might be null. */
 	context_switch_count++;
 	current_tsc = get_rdtsc(); /* Timestamp this moment for comparisons. */
 
 	/* Retrieve and update the prev_task start/total time. */
+	if (!prev_task)
+		goto null_prev;
 	prev_start = get_pid_starttsc(prev_task->pid); /* prev_start->cpu == -1 only if it's a new struct. */
 	prev_total = get_pid_totaltsc(prev_task->pid);
 	if (prev_start->cpu > -1) /* prev_start->start_tsc only has meaning if it's not a new struct */
@@ -209,13 +207,16 @@ static int ret_pick_next_fair(struct kretprobe_instance *ri, struct pt_regs *reg
 		prev_total->process_name = kmalloc(strlen(prev_task->comm) + 1, GFP_NOWAIT);
 		strcpy(prev_total->process_name, prev_task->comm);
 	}
+null_prev:
 
+	if (!next_task)
+		goto null_next;
 	/* Retrieve and update the next_task start time. */
 	next_start = get_pid_starttsc(next_task->pid);
 	next_start->start_tsc = current_tsc;
 	next_start->cpu = next_task->cpu;
+null_next:
 
-null_task:
 no_context_switch:
 	spin_unlock_irqrestore(&post_count_lock, flags);
 	return 0;
