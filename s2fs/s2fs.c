@@ -1,0 +1,56 @@
+#include <linux/kernel.h>
+#include <linux/init.h>
+#include <linux/module.h>
+#include <linux/fs.h>
+#include <linux/pagemap.h>
+
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("James Leonardi <james.leonardi@stonybrook.edu>");
+MODULE_DESCRIPTION("File System");
+
+#define S2FS_MAGIC 0xE3256B
+
+static int s2fs_fill_super(struct super_block *sb, void *data, int silent)
+{
+	struct inode *root;
+	struct dentry *root_dentry;
+
+	/* Set up super_block struct. */
+	static struct super_operations s2fs_s_ops = {
+		.statfs		= simple_statfs,
+		.drop_inode	= generic_delete_inode
+	};
+	sb->s_blocksize		= VMACACHE_SIZE;
+	sb->s_blocksize_bits	= VMACACHE_SIZE;
+	sb->s_magic		= S2FS_MAGIC;
+	sb->s_op		= &s2fs_s_ops;
+
+	return 0;
+}
+
+static struct dentry *s2fs_get_super(struct file_system_type *fst,
+		int flags, const char *devname, void *data)
+{
+	return mount_nodev(fst, flags, data, s2fs_fill_super);
+}
+
+static struct file_system_type s2fs_type = {
+	.owner		= THIS_MODULE,
+	.name		= "s2fs",
+	.mount		= s2fs_get_super,
+	.kill_sb	= kill_litter_super
+};
+	
+/* Entry/exit functions */
+static int __init s2fs_init(void)
+{
+	return register_filesystem(&s2fs_type);
+}
+
+static void __exit s2fs_exit(void)
+{
+	unregister_filesystem(&s2fs_type);
+}
+
+module_init(s2fs_init);
+module_exit(s2fs_exit);
