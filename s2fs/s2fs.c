@@ -9,19 +9,21 @@ MODULE_AUTHOR("James Leonardi <james.leonardi@stonybrook.edu>");
 MODULE_DESCRIPTION("File System");
 
 #define S2FS_MAGIC 0xE3256B
+#define S2FS_PAGESHIFT 12
+#define S2FS_PAGESIZE (1UL << S2FS_PAGESHIFT)
 
 static int s2fs_fill_super(struct super_block *sb, void *data, int silent)
 {
-	struct inode *root;
-	struct dentry *root_dentry;
+//	struct inode *root;
+//	struct dentry *root_dentry;
 
 	/* Set up super_block struct. */
 	static struct super_operations s2fs_s_ops = {
 		.statfs		= simple_statfs,
 		.drop_inode	= generic_delete_inode
 	};
-	sb->s_blocksize		= VMACACHE_SIZE;
-	sb->s_blocksize_bits	= VMACACHE_SIZE;
+	sb->s_blocksize		= S2FS_PAGESIZE;
+	sb->s_blocksize_bits	= S2FS_PAGESHIFT;
 	sb->s_magic		= S2FS_MAGIC;
 	sb->s_op		= &s2fs_s_ops;
 
@@ -38,7 +40,7 @@ static struct file_system_type s2fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= "s2fs",
 	.mount		= s2fs_get_super,
-	.kill_sb	= kill_litter_super
+	.kill_sb	= kill_anon_super
 };
 	
 /* Entry/exit functions */
