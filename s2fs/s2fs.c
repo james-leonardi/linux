@@ -14,8 +14,8 @@ MODULE_DESCRIPTION("File System");
 
 static int s2fs_fill_super(struct super_block *sb, void *data, int silent)
 {
-//	struct inode *root;
-//	struct dentry *root_dentry;
+	struct inode *root;
+	struct dentry *root_dentry;
 
 	/* Set up super_block struct. */
 	static struct super_operations s2fs_s_ops = {
@@ -27,12 +27,30 @@ static int s2fs_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_magic		= S2FS_MAGIC;
 	sb->s_op		= &s2fs_s_ops;
 
+	root = new_inode(sb);
+	if (!root)
+		return -ENOMEM;
+
+	root->i_ino = 1;
+	root->i_sb = sb;
+	root->i_op = &simple_dir_inode_operations;
+	root->i_fop = &simple_dir_operations;
+
+	root_dentry = d_make_root(root);
+	if (!root_dentry) {
+		iput(root);
+		return -ENOMEM;
+	}
+
+	sb->s_root = root_dentry;
+
 	return 0;
 }
 
 static struct dentry *s2fs_get_super(struct file_system_type *fst,
 		int flags, const char *devname, void *data)
 {
+	printk(KERN_INFO "hello\n");
 	return mount_nodev(fst, flags, data, s2fs_fill_super);
 }
 
