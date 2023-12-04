@@ -12,16 +12,17 @@ MODULE_DESCRIPTION("File System");
 #define S2FS_PAGESHIFT 12
 #define S2FS_PAGESIZE (1UL << S2FS_PAGESHIFT)
 
+static struct super_operations s2fs_s_ops = {
+	.statfs		= simple_statfs,
+	.drop_inode	= generic_delete_inode
+};
+
 static int s2fs_fill_super(struct super_block *sb, void *data, int silent)
 {
 	struct inode *root;
 	struct dentry *root_dentry;
 
 	/* Set up super_block struct. */
-	static struct super_operations s2fs_s_ops = {
-		.statfs		= simple_statfs,
-		.drop_inode	= generic_delete_inode
-	};
 	sb->s_blocksize		= S2FS_PAGESIZE;
 	sb->s_blocksize_bits	= S2FS_PAGESHIFT;
 	sb->s_magic		= S2FS_MAGIC;
@@ -32,6 +33,7 @@ static int s2fs_fill_super(struct super_block *sb, void *data, int silent)
 		return -ENOMEM;
 
 	root->i_ino = 1;
+	root->i_mode = S_IFDIR | S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH;
 	root->i_sb = sb;
 	root->i_op = &simple_dir_inode_operations;
 	root->i_fop = &simple_dir_operations;
@@ -50,7 +52,7 @@ static int s2fs_fill_super(struct super_block *sb, void *data, int silent)
 static struct dentry *s2fs_get_super(struct file_system_type *fst,
 		int flags, const char *devname, void *data)
 {
-	printk(KERN_INFO "hello\n");
+	printk(KERN_INFO "s2fs_get_super\n");
 	return mount_nodev(fst, flags, data, s2fs_fill_super);
 }
 
