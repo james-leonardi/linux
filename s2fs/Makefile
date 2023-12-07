@@ -8,10 +8,21 @@ all: s2fs.c
 clean:
 	make -C $(KDIR) M=$(PWD) clean
 
-install: all
+install:
 	insmod s2fs.ko
 
 uninstall:
 	rmmod s2fs
 
 reinstall: uninstall install
+
+mount: all install
+	mkdir -p mnt
+	mount -t s2fs nodev ./mnt
+
+umount:
+	umount ./mnt
+	rm -rf ./mnt
+	rmmod s2fs
+
+remount: umount mount
