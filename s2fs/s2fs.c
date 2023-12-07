@@ -51,9 +51,18 @@ static ssize_t s2fs_read(struct file *file, char __user *buf,
 		size_t count, loff_t *offset)
 {
 	unsigned long msg_len = strlen(msg);
-	if (copy_to_user(buf, msg, msg_len))
+
+	if (*offset > msg_len) /* EOF */
+		return 0;
+
+	if (count > msg_len - *offset)
+		count = msg_len - *offset;
+
+	if (copy_to_user(buf, msg + *offset, count))
 		return -EFAULT;
-	return msg_len;
+
+	*offset += count;
+	return count;
 }
 
 static struct file_operations s2fs_fops = {
