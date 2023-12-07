@@ -53,7 +53,7 @@ static ssize_t s2fs_read(struct file *file, char __user *buf,
 	unsigned long msg_len = strlen(msg);
 	if (copy_to_user(buf, msg, msg_len))
 		return -EFAULT;
-	return 0;
+	return msg_len;
 }
 
 static struct file_operations s2fs_fops = {
@@ -65,20 +65,36 @@ static struct file_operations s2fs_fops = {
 static struct dentry *s2fs_create_file(struct super_block *sb,
 		struct dentry *dir, const char *file_name)
 {
-	return NULL;
+	struct inode *inode;
+	struct dentry *dentry;
+
+	dentry = d_alloc_name(dir, file_name);
+	if (!dentry)
+		return NULL;
+
+	inode = s2fs_make_inode(sb, S_IFREG | 0644);
+	if (!inode) {
+		dput(dentry);
+		return NULL;
+	}
+
+	inode->i_fop = &s2fs_fops;
+
+	d_add(dentry, inode);
+	return dentry;
 }
 
 static struct dentry *s2fs_create_dir(struct super_block *sb,
 		struct dentry *parent, const char *dir_name)
 {
-	struct dentry *dentry;
 	struct inode *inode;
+	struct dentry *dentry;
 
 	dentry = d_alloc_name(parent, dir_name);
 	if (!dentry)
 		return NULL;
 
-	inode = s2fs_make_inode(sb, S_IFDIR | S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);
+	inode = s2fs_make_inode(sb, S_IFDIR | 0755);
 	if (!inode) {
 		dput(dentry);
 		return NULL;
@@ -99,6 +115,8 @@ static int s2fs_fill_super(struct super_block *sb, void *data, int silent)
 {
 	struct inode *root;
 	struct dentry *root_dentry;
+	/* Test variables */
+	struct dentry *foo, *bar;
 
 	/* Set up super_block struct. */
 	sb->s_blocksize		= S2FS_PAGESIZE;
@@ -111,7 +129,7 @@ static int s2fs_fill_super(struct super_block *sb, void *data, int silent)
 		return -ENOMEM;
 
 	root->i_ino = 1;
-	root->i_mode = S_IFDIR | S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH;
+	root->i_mode = S_IFDIR | 0755;
 	root->i_sb = sb;
 	root->i_op = &simple_dir_inode_operations;
 	root->i_fop = &simple_dir_operations;
@@ -123,6 +141,10 @@ static int s2fs_fill_super(struct super_block *sb, void *data, int silent)
 	}
 
 	sb->s_root = root_dentry;
+
+	/* Test operations */
+	foo = s2fs_create_dir(sb, root_dentry, "foo");
+	bar = s2fs_create_file(sb, foo, "bar");
 
 	return 0;
 }
